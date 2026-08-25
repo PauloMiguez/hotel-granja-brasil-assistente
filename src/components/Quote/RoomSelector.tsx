@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Room, Reservation } from '../../types';
 import { formatCurrency } from '../../utils/currencyUtils';
-import { calculateNights } from '../../utils/dateUtils';
 import { VideoModal } from '../VideoModal/VideoModal';
 import { Button } from '../Shared/Button';
 
@@ -32,7 +31,6 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
   const [videoOpen, setVideoOpen] = useState(false);
   const [videoSrc, setVideoSrc] = useState('');
 
-  const nights = calculateNights(startDate, endDate);
   const payingChildren = (hasChildren ? (childAge1 > 6 ? 1 : 0) + (childrenCount === 2 && childAge2 > 6 ? 1 : 0) : 0);
   const totalGuests = adults + payingChildren;
   const extraGuests = Math.max(0, totalGuests - 2);

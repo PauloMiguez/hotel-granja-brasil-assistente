@@ -13,6 +13,15 @@ interface QuoteFormProps {
   onClose?: () => void;
 }
 
+// Função auxiliar para formatar data sem problemas de fuso
+const formatDateLocal = (dateStr: string): string => {
+  const date = new Date(dateStr);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
 export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   const { state, dispatch } = useAppContext();
   const [view, setView] = useState<'form' | 'cart' | 'final'>('form');
@@ -50,12 +59,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     }
     if (new Date(endDate) <= new Date(startDate)) {
       setError('A data de check-out deve ser posterior à data de check-in.');
-      return;
-    }
-
-    const totalGuests = adults + childrenCount;
-    if (!validateGuests(adults, childrenCount)) {
-      setError('Capacidade máxima excedida (máximo 3 hóspedes).');
       return;
     }
 

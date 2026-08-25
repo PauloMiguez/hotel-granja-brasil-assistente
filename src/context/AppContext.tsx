@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, ReactNode } from 'react';
-import { AppState, AppAction, Message, Reservation, QuoteData, Room, AvailabilityResponse } from '../types';
+import { AppState, AppAction } from '../types';
 
 const initialState: AppState = {
   messages: [],

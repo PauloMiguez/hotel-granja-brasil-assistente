@@ -10,7 +10,6 @@ export const useChat = () => {
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const hasWelcomeRef = useRef(false);
 
-  // Mensagem de boas-vindas
   useEffect(() => {
     if (!hasWelcomeRef.current && state.messages.length === 0) {
       const welcomeMessage: Message = {
@@ -35,7 +34,6 @@ export const useChat = () => {
     }
   }, [state.messages.length, dispatch]);
 
-  // Restaura conversationId
   useEffect(() => {
     const savedId = localStorage.getItem('granja_conversation_id');
     if (savedId && !state.conversationId) {
@@ -56,10 +54,8 @@ export const useChat = () => {
 
     const lowerText = text.toLowerCase();
 
-    // Intercepta orçamento (ativa o formulário via estado)
     if (lowerText.includes('orçamento') || lowerText.includes('orcamento') || lowerText.includes('preço') || lowerText.includes('valor') || lowerText.includes('reserva')) {
       setShowQuoteForm(true);
-      // Adiciona uma mensagem do bot indicando que o formulário será exibido
       const quoteMessage: Message = {
         id: (Date.now() + 1).toString(),
         content: `<p>💰 Preencha o formulário abaixo para solicitar seu orçamento.</p>`,
@@ -70,15 +66,15 @@ export const useChat = () => {
       return;
     }
 
-    // Para outras mensagens, chama a IA
     setIsSending(true);
 
     try {
+      // 🔥 CORREÇÃO: Usar "as const" para garantir o tipo literal
       const historyForAPI = state.messages
         .filter(msg => typeof msg.content === 'string')
         .slice(-20)
         .map(msg => ({
-          role: msg.isUser ? 'user' : 'assistant' as const,
+          role: msg.isUser ? ('user' as const) : ('assistant' as const),
           content: msg.content as string,
           timestamp: msg.timestamp.toISOString(),
         }));

@@ -2,8 +2,17 @@ import React from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { Reservation } from '../../types';
 import { formatCurrency } from '../../utils/currencyUtils';
-import { calculateNights, formatDisplayDate } from '../../utils/dateUtils';
+import { calculateNights } from '../../utils/dateUtils';
 import { Button } from '../Shared/Button';
+
+// Função auxiliar para formatar data sem problemas de fuso
+const formatDateLocal = (dateStr: string): string => {
+  const date = new Date(dateStr);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+};
 
 interface CartSummaryProps {
   onAddMore: () => void;
@@ -24,8 +33,8 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
 
   const firstReservation = cart[0];
   const nights = calculateNights(firstReservation.startDate, firstReservation.endDate);
-  const startDate = formatDisplayDate(firstReservation.startDate);
-  const endDate = formatDisplayDate(firstReservation.endDate);
+  const startDate = formatDateLocal(firstReservation.startDate);
+  const endDate = formatDateLocal(firstReservation.endDate);
 
   let subtotal = 0;
 

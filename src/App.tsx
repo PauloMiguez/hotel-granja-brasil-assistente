@@ -1,4 +1,3 @@
-import React from 'react';
 import { AppProvider } from './context/AppContext';
 import { ChatContainer } from './components/Chat/ChatContainer';
 import './index.css';
