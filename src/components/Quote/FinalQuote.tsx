@@ -1,18 +1,9 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { formatCurrency } from '../../utils/currencyUtils';
-import { calculateNights } from '../../utils/dateUtils';
+import { calculateNights, formatDisplayDate } from '../../utils/dateUtils';
 import { HOTEL_CONFIG } from '../../services/hotelConfig';
 import { Button } from '../Shared/Button';
-
-// Função auxiliar para formatar data sem problemas de fuso
-const formatDateLocal = (dateStr: string): string => {
-  const date = new Date(dateStr);
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  return `${day}/${month}/${year}`;
-};
 
 interface FinalQuoteProps {
   onBack: () => void;
@@ -29,8 +20,8 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
 
   const firstReservation = cart[0];
   const nights = calculateNights(firstReservation.startDate, firstReservation.endDate);
-  const startDate = formatDateLocal(firstReservation.startDate);
-  const endDate = formatDateLocal(firstReservation.endDate);
+  const startDate = formatDisplayDate(firstReservation.startDate);
+  const endDate = formatDisplayDate(firstReservation.endDate);
 
   let subtotal = 0;
   let totalExtraGuests = 0;
