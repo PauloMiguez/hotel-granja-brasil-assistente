@@ -59,3 +59,14 @@
   padding: 20px 24px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.04);
 }
+/* Ocultar texto "Online" em telas muito pequenas */
+@media (max-width: 400px) {
+  .xs\:inline {
+    display: inline !important;
+  }
+}
+@media (min-width: 401px) {
+  .xs\:inline {
+    display: inline !important;
+  }
+}

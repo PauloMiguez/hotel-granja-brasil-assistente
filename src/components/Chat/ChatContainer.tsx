@@ -27,15 +27,15 @@ export const ChatContainer: React.FC = () => {
 
   return (
     <>
-      {/* Container principal do chat */}
-      <div className="flex flex-col h-full bg-[#e5ddd5] overflow-hidden">
+      {/* Container principal do chat - ocupa 100% da altura disponível */}
+      <div className="flex flex-col h-full w-full bg-[#e5ddd5] overflow-hidden">
         {/* Header */}
         <div className="bg-[#075e54] text-white p-4 flex items-center gap-2 flex-shrink-0">
           <span className="text-xl">🏨</span>
           <span className="font-semibold">Hotel Granja Brasil</span>
           <span className="ml-auto text-sm flex items-center gap-1">
             <span className="w-2 h-2 bg-green-400 rounded-full inline-block"></span>
-            Online
+            <span className="hidden xs:inline">Online</span>
           </span>
         </div>
 
