@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { fetchAvailability } from '../../services/api/availabilityApi';
 import { fetchHotelRates } from '../../services/api/ratesApi';
-import { validateMinLOS, validateGuests } from '../../utils/validation';
+import { validateMinLOS } from '../../utils/validation';
 import { getTomorrowDate, formatDateToDDMMAAAA, getDatesBetween } from '../../utils/dateUtils';
 import { RoomSelector } from './RoomSelector';
 import { CartSummary } from './CartSummary';
@@ -14,13 +14,6 @@ interface QuoteFormProps {
 }
 
 // Função auxiliar para formatar data sem problemas de fuso
-const formatDateLocal = (dateStr: string): string => {
-  const date = new Date(dateStr);
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  return `${day}/${month}/${year}`;
-};
 
 export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   const { state, dispatch } = useAppContext();

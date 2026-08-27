@@ -1,20 +1,13 @@
-import { format, addDays, differenceInDays, isValid } from 'date-fns';
+import { differenceInDays } from 'date-fns';
 
-// Converte string YYYY-MM-DD para objeto Date com hora local meia-noite (sem fuso)
 export function parseDateLocal(dateStr: string): Date {
   const [year, month, day] = dateStr.split('-').map(Number);
-  return new Date(year, month - 1, day); // mês é 0-indexado
+  return new Date(year, month - 1, day);
 }
 
 export function formatDateToDDMMAAAA(dateStr: string): string {
   const [year, month, day] = dateStr.split('-').map(Number);
-  const d = String(day).padStart(2, '0');
-  const m = String(month).padStart(2, '0');
-  return `${d}/${m}/${year}`;
-}
-
-export function formatDateToISO(dateStr: string): string {
-  return dateStr; // já está no formato YYYY-MM-DD
+  return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
 }
 
 export function getDatesBetween(startDate: string, endDate: string): string[] {
