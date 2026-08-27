@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { fetchAvailability } from '../../services/api/availabilityApi';
 import { fetchHotelRates } from '../../services/api/ratesApi';
-import { validateMinLOS } from '../../utils/validation';
+import { validateMinLOS, validateGuests, isRoomValidForGuests } from '../../utils/validation';
 import { getTomorrowDate, formatDateToDDMMAAAA, getDatesBetween } from '../../utils/dateUtils';
 import { RoomSelector } from './RoomSelector';
 import { CartSummary } from './CartSummary';
@@ -28,6 +28,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   const [error, setError] = useState('');
   const [showRoomSelector, setShowRoomSelector] = useState(false);
 
+  // Datas padrão
   useEffect(() => {
     const tomorrow = getTomorrowDate();
     setStartDate(tomorrow);
@@ -36,12 +37,26 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     setEndDate(end.toISOString().split('T')[0]);
   }, []);
 
-  // ========= FUNÇÃO PARA APLICAR RESERVAS DO CARRINHO SOBRE A DISPONIBILIDADE =========
+  // Validação em tempo real (desabilita o botão se inválido)
+  useEffect(() => {
+    const childAges = hasChildren
+      ? (childrenCount === 1 ? [childAge1] : [childAge1, childAge2])
+      : [];
+    const validation = validateGuests(adults, childrenCount, childAges);
+    if (!validation.valid) {
+      setError(validation.message || 'Configuração de hóspedes inválida.');
+    } else if (validation.message) {
+      // Aviso (não bloqueia)
+      setError(validation.message);
+    } else {
+      setError('');
+    }
+  }, [adults, hasChildren, childrenCount, childAge1, childAge2]);
+
+  // ========= APLICA RESERVAS DO CARRINHO SOBRE A DISPONIBILIDADE =========
   const applyCartReservationsToAvailability = (baseAvailability: AvailabilityResponse): AvailabilityResponse => {
     if (state.cart.length === 0 || !baseAvailability) return baseAvailability;
-
     const newAvailability = JSON.parse(JSON.stringify(baseAvailability));
-
     state.cart.forEach(res => {
       const roomCode = res.room.codigo;
       const dates = getDatesBetween(res.startDate, res.endDate);
@@ -52,7 +67,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         }
       });
     });
-
     return newAvailability;
   };
 
@@ -71,6 +85,16 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     }
     if (new Date(endDate) <= new Date(startDate)) {
       setError('A data de check-out deve ser posterior à data de check-in.');
+      return;
+    }
+
+    // ========= VALIDAÇÃO DE CAPACIDADE =========
+    const childAges = hasChildren
+      ? (childrenCount === 1 ? [childAge1] : [childAge1, childAge2])
+      : [];
+    const guestValidation = validateGuests(adults, childrenCount, childAges);
+    if (!guestValidation.valid) {
+      setError(guestValidation.message || 'Configuração de hóspedes inválida.');
       return;
     }
 
@@ -93,22 +117,28 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
 
       const ratesData = await fetchHotelRates(formattedStart, formattedEnd);
 
+      // Filtra quartos usando a validação correta
       const availableRooms = ratesData.data.dataFormatted.filter(room => {
-        const roomName = room.descricao.toLowerCase();
-        const isSuite = roomName.includes('suíte') || roomName.includes('suite');
-        const isSuperior = roomName.includes('apartamento superior');
-        const totalGuests = adults + childrenCount;
-
+        // Verifica disponibilidade para todas as datas
         const dates = getDatesBetween(startDate, endDate);
         const isAvailable = dates.every(date => {
           const roomData = adjustedAvailability.wsrolRS.disponibilidadeRS.disponibilidade.result[room.codigo];
           return roomData && roomData.diaria[date] > 0;
         });
-
         if (!isAvailable) return false;
-        if (isSuperior && totalGuests > 2) return false;
-        if (hasChildren && (childAge1 <= 6 || (childrenCount === 2 && childAge2 <= 6)) && !isSuite) return false;
 
+        // Verifica regras de capacidade do quarto
+        const roomCheck = isRoomValidForGuests(
+          room.descricao,
+          adults,
+          childAges,
+          guestValidation.totalGuests,
+          guestValidation.payingGuests
+        );
+        if (!roomCheck.valid) {
+          console.log(`❌ ${room.descricao} bloqueado: ${roomCheck.reason}`);
+          return false;
+        }
         return true;
       });
 
@@ -132,16 +162,12 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     }
   };
 
-  // ========= FUNÇÃO PARA ADICIONAR AO CARRINHO =========
+  // ========= ADICIONAR AO CARRINHO =========
   const handleAddToCart = (reservations: any[]) => {
     if (reservations.length === 0) return;
-
-    // Adiciona todas ao carrinho
     reservations.forEach(res => {
       dispatch({ type: 'ADD_TO_CART', payload: res });
     });
-
-    // Atualiza disponibilidade subtraindo as reservas adicionadas
     if (state.availability) {
       const newAvailability = JSON.parse(JSON.stringify(state.availability));
       reservations.forEach(res => {
@@ -156,19 +182,17 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       });
       dispatch({ type: 'SET_AVAILABILITY', payload: newAvailability });
     }
-
-    // Fecha seletor e vai para o carrinho
     setShowRoomSelector(false);
     setView('cart');
-    setError(''); // Limpa erro ao adicionar ao carrinho
+    setError('');
   };
 
-  // ========= FUNÇÃO PARA VOLTAR AO FORMULÁRIO (adicionar mais) =========
+  // ========= VOLTAR AO FORMULÁRIO (ADICIONAR MAIS) =========
   const handleAddMore = () => {
     setView('form');
     setShowRoomSelector(false);
-    setError(''); // Limpa erro ao tentar adicionar mais
-    // Recarrega a disponibilidade para refletir o estado atual do carrinho
+    setError('');
+    // Recarrega a disponibilidade
     handleCheckAvailability();
   };
 
@@ -176,13 +200,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   if (view === 'cart') {
     return (
       <div className="relative">
-        {onClose && (
-          <button onClick={onClose} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700 text-xl">✕</button>
-        )}
-        <CartSummary
-          onAddMore={handleAddMore}
-          onFinalize={() => setView('final')}
-        />
+        {onClose && <button onClick={onClose} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700 text-xl">✕</button>}
+        <CartSummary onAddMore={handleAddMore} onFinalize={() => setView('final')} />
       </div>
     );
   }
@@ -190,9 +209,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   if (view === 'final') {
     return (
       <div className="relative">
-        {onClose && (
-          <button onClick={onClose} className="absolute top-2 right-2 text-white hover:text-gray-300 text-xl z-10">✕</button>
-        )}
+        {onClose && <button onClick={onClose} className="absolute top-2 right-2 text-white hover:text-gray-300 text-xl z-10">✕</button>}
         <FinalQuote onBack={() => setView('cart')} />
       </div>
     );
@@ -210,6 +227,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       <p className="text-sm text-gray-600 mb-4">Preencha os dados abaixo para consultar disponibilidade em tempo real.</p>
 
       <div className="space-y-4">
+        {/* Datas */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-gray-700">Check-in</label>
@@ -221,6 +239,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
           </div>
         </div>
 
+        {/* Adultos */}
         <div>
           <label className="block text-sm font-medium text-gray-700">Adultos</label>
           <select value={adults} onChange={(e) => setAdults(Number(e.target.value))} className="w-full p-2 border border-gray-300 rounded-md text-sm">
@@ -230,6 +249,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
           </select>
         </div>
 
+        {/* Crianças */}
         <div className="border-t pt-4">
           <label className="block text-sm font-medium text-gray-700 mb-2">👶 Crianças (até 17 anos)</label>
           <div className="space-y-2">
@@ -263,9 +283,20 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
           </div>
         </div>
 
-        {error && <div className="text-red-600 text-sm bg-red-50 p-2 rounded">{error}</div>}
+        {/* Mensagem de erro ou aviso */}
+        {error && (
+          <div className={`text-sm p-2 rounded ${error.includes('Atenção') ? 'text-yellow-700 bg-yellow-50' : 'text-red-600 bg-red-50'}`}>
+            {error}
+          </div>
+        )}
 
-        <Button variant="primary" onClick={handleCheckAvailability} disabled={isLoading} className="w-full">
+        {/* Botão de consulta (desabilitado se houver erro grave) */}
+        <Button
+          variant="primary"
+          onClick={handleCheckAvailability}
+          disabled={isLoading || (!!error && !error.includes('Atenção'))}
+          className="w-full"
+        >
           {isLoading ? 'Consultando...' : '🔍 Consultar Disponibilidade'}
         </Button>
 
