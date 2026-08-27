@@ -10,6 +10,7 @@ export const useChat = () => {
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const hasWelcomeRef = useRef(false);
 
+  // Mensagem de boas-vindas
   useEffect(() => {
     if (!hasWelcomeRef.current && state.messages.length === 0) {
       const welcomeMessage: Message = {
@@ -34,6 +35,7 @@ export const useChat = () => {
     }
   }, [state.messages.length, dispatch]);
 
+  // Restaura conversationId
   useEffect(() => {
     const savedId = localStorage.getItem('granja_conversation_id');
     if (savedId && !state.conversationId) {
@@ -54,6 +56,7 @@ export const useChat = () => {
 
     const lowerText = text.toLowerCase();
 
+    // Intercepta orçamento
     if (lowerText.includes('orçamento') || lowerText.includes('orcamento') || lowerText.includes('preço') || lowerText.includes('valor') || lowerText.includes('reserva')) {
       setShowQuoteForm(true);
       const quoteMessage: Message = {
@@ -66,10 +69,11 @@ export const useChat = () => {
       return;
     }
 
+    // ========= INÍCIO DO PROCESSAMENTO COM DELAY MÍNIMO =========
+    const startTime = Date.now();
     setIsSending(true);
 
     try {
-      // 🔥 CORREÇÃO: Usar "as const" para garantir o tipo literal
       const historyForAPI = state.messages
         .filter(msg => typeof msg.content === 'string')
         .slice(-20)
@@ -117,6 +121,15 @@ export const useChat = () => {
       };
       dispatch({ type: 'ADD_MESSAGE', payload: errorMessage });
     } finally {
+      // ========= DELAY MÍNIMO DE 3 SEGUNDOS =========
+      const elapsed = Date.now() - startTime;
+      const minDelay = 3000; // 3 segundos
+      const remaining = Math.max(0, minDelay - elapsed);
+      
+      if (remaining > 0) {
+        await new Promise(resolve => setTimeout(resolve, remaining));
+      }
+      
       setIsSending(false);
     }
   }, [state.messages, state.conversationId, isSending, dispatch]);
