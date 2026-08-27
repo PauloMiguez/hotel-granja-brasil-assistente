@@ -2,7 +2,7 @@ import React from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { Reservation } from '../../types';
 import { formatCurrency } from '../../utils/currencyUtils';
-import { calculateNights, formatDisplayDate } from '../../utils/dateUtils';
+import { calculateNights, formatDisplayDate, getDatesBetween } from '../../utils/dateUtils';
 import { Button } from '../Shared/Button';
 
 interface CartSummaryProps {
@@ -30,7 +30,54 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
   let subtotal = 0;
 
   const handleRemove = (index: number) => {
+    const removed = cart[index];
+    const roomCode = removed.room.codigo;
+    const dates = getDatesBetween(removed.startDate, removed.endDate);
+
+    // Restaurar disponibilidade
+    if (state.availability) {
+      const newAvailability = JSON.parse(JSON.stringify(state.availability));
+      dates.forEach(date => {
+        const roomData = newAvailability.wsrolRS.disponibilidadeRS.disponibilidade.result[roomCode];
+        if (roomData && roomData.diaria[date] !== undefined) {
+          roomData.diaria[date] += 1;
+        }
+      });
+      dispatch({ type: 'SET_AVAILABILITY', payload: newAvailability });
+    }
+
+    // Remover do carrinho
     dispatch({ type: 'REMOVE_FROM_CART', payload: index });
+  };
+
+  // Exibir disponibilidade restante
+  const renderAvailability = () => {
+    if (!state.availability) return null;
+    const dates = getDatesBetween(firstReservation.startDate, firstReservation.endDate);
+    const roomTypes = [
+      { name: "Apartamento Superior", code: "SUP" },
+      { name: "Suíte Sênior", code: "SEN" },
+      { name: "Suíte Master (Cobertura)", code: "MAS" }
+    ];
+
+    return (
+      <div className="bg-gray-50 p-3 rounded text-sm mt-3">
+        <p className="font-semibold mb-1">📊 Disponibilidade restante:</p>
+        {roomTypes.map(rt => {
+          const minQty = Math.min(
+            ...dates.map(date => {
+              const roomData = state.availability?.wsrolRS.disponibilidadeRS.disponibilidade.result[rt.code];
+              return roomData ? (roomData.diaria[date] || 0) : 0;
+            })
+          );
+          return (
+            <p key={rt.code} className="text-xs text-gray-600">
+              {rt.name}: <strong>{minQty}</strong> unidade{minQty > 1 ? 's' : ''}
+            </p>
+          );
+        })}
+      </div>
+    );
   };
 
   return (
@@ -72,6 +119,8 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
           );
         })}
       </div>
+
+      {renderAvailability()}
 
       <div className="border-t mt-3 pt-3 flex justify-between font-semibold">
         <span>Subtotal</span>

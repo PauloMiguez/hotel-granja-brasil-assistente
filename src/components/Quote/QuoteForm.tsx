@@ -8,12 +8,11 @@ import { RoomSelector } from './RoomSelector';
 import { CartSummary } from './CartSummary';
 import { FinalQuote } from './FinalQuote';
 import { Button } from '../Shared/Button';
+import { AvailabilityResponse } from '../../types';
 
 interface QuoteFormProps {
   onClose?: () => void;
 }
-
-// Função auxiliar para formatar data sem problemas de fuso
 
 export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   const { state, dispatch } = useAppContext();
@@ -36,6 +35,26 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     end.setDate(end.getDate() + 2);
     setEndDate(end.toISOString().split('T')[0]);
   }, []);
+
+  // ========= FUNÇÃO PARA APLICAR RESERVAS DO CARRINHO SOBRE A DISPONIBILIDADE =========
+  const applyCartReservationsToAvailability = (baseAvailability: AvailabilityResponse): AvailabilityResponse => {
+    if (state.cart.length === 0 || !baseAvailability) return baseAvailability;
+
+    const newAvailability = JSON.parse(JSON.stringify(baseAvailability));
+
+    state.cart.forEach(res => {
+      const roomCode = res.room.codigo;
+      const dates = getDatesBetween(res.startDate, res.endDate);
+      dates.forEach(date => {
+        const roomData = newAvailability.wsrolRS.disponibilidadeRS.disponibilidade.result[roomCode];
+        if (roomData && roomData.diaria[date] !== undefined && roomData.diaria[date] > 0) {
+          roomData.diaria[date] -= 1;
+        }
+      });
+    });
+
+    return newAvailability;
+  };
 
   const handleCheckAvailability = async () => {
     setError('');
@@ -69,7 +88,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       const formattedEnd = formatDateToDDMMAAAA(endDate);
 
       const availabilityData = await fetchAvailability(startDate, endDate);
-      dispatch({ type: 'SET_AVAILABILITY', payload: availabilityData });
+      const adjustedAvailability = applyCartReservationsToAvailability(availabilityData);
+      dispatch({ type: 'SET_AVAILABILITY', payload: adjustedAvailability });
 
       const ratesData = await fetchHotelRates(formattedStart, formattedEnd);
 
@@ -81,7 +101,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
 
         const dates = getDatesBetween(startDate, endDate);
         const isAvailable = dates.every(date => {
-          const roomData = availabilityData.wsrolRS.disponibilidadeRS.disponibilidade.result[room.codigo];
+          const roomData = adjustedAvailability.wsrolRS.disponibilidadeRS.disponibilidade.result[room.codigo];
           return roomData && roomData.diaria[date] > 0;
         });
 
@@ -96,17 +116,60 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         setError('Não há acomodações disponíveis para o período selecionado com a configuração de hóspedes informada.');
         setIsLoading(false);
         dispatch({ type: 'SET_LOADING', payload: false });
+        setShowRoomSelector(false);
         return;
       }
 
       dispatch({ type: 'SET_SELECTED_ROOMS', payload: availableRooms });
       setShowRoomSelector(true);
+      setError(''); // Limpa qualquer erro residual
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao consultar disponibilidade.');
+      setShowRoomSelector(false);
     } finally {
       setIsLoading(false);
       dispatch({ type: 'SET_LOADING', payload: false });
     }
+  };
+
+  // ========= FUNÇÃO PARA ADICIONAR AO CARRINHO =========
+  const handleAddToCart = (reservations: any[]) => {
+    if (reservations.length === 0) return;
+
+    // Adiciona todas ao carrinho
+    reservations.forEach(res => {
+      dispatch({ type: 'ADD_TO_CART', payload: res });
+    });
+
+    // Atualiza disponibilidade subtraindo as reservas adicionadas
+    if (state.availability) {
+      const newAvailability = JSON.parse(JSON.stringify(state.availability));
+      reservations.forEach(res => {
+        const roomCode = res.room.codigo;
+        const dates = getDatesBetween(res.startDate, res.endDate);
+        dates.forEach(date => {
+          const roomData = newAvailability.wsrolRS.disponibilidadeRS.disponibilidade.result[roomCode];
+          if (roomData && roomData.diaria[date] !== undefined && roomData.diaria[date] > 0) {
+            roomData.diaria[date] -= 1;
+          }
+        });
+      });
+      dispatch({ type: 'SET_AVAILABILITY', payload: newAvailability });
+    }
+
+    // Fecha seletor e vai para o carrinho
+    setShowRoomSelector(false);
+    setView('cart');
+    setError(''); // Limpa erro ao adicionar ao carrinho
+  };
+
+  // ========= FUNÇÃO PARA VOLTAR AO FORMULÁRIO (adicionar mais) =========
+  const handleAddMore = () => {
+    setView('form');
+    setShowRoomSelector(false);
+    setError(''); // Limpa erro ao tentar adicionar mais
+    // Recarrega a disponibilidade para refletir o estado atual do carrinho
+    handleCheckAvailability();
   };
 
   // Views
@@ -117,7 +180,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
           <button onClick={onClose} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700 text-xl">✕</button>
         )}
         <CartSummary
-          onAddMore={() => { setView('form'); setShowRoomSelector(false); }}
+          onAddMore={handleAddMore}
           onFinalize={() => setView('final')}
         />
       </div>
@@ -216,15 +279,12 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
             childrenCount={childrenCount}
             childAge1={childAge1}
             childAge2={childAge2}
-            onAddToCart={(reservation) => {
-              dispatch({ type: 'ADD_TO_CART', payload: reservation });
-              setShowRoomSelector(false);
-              setView('cart');
-            }}
+            availability={state.availability}
+            onAddToCart={handleAddToCart}
           />
         )}
 
-        {state.cart.length > 0 && !showRoomSelector && (
+        {state.cart.length > 0 && !showRoomSelector && !error && (
           <Button variant="outline" onClick={() => setView('cart')} className="w-full mt-2">
             🛒 Ver carrinho ({state.cart.length} item{state.cart.length > 1 ? 's' : ''})
           </Button>

@@ -34,17 +34,17 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
     totalExtraGuests += extraGuestCost;
 
     return (
-      <div key={idx} className="border-b border-gray-100 py-2 last:border-0">
-        <p className="font-medium text-sm">{item.room.descricao}</p>
-        <p className="text-xs text-gray-600">
+      <div key={idx} className="border-b border-white/20 py-3 last:border-0">
+        <p className="font-medium text-white text-sm">{item.room.descricao}</p>
+        <p className="text-gray-300 text-xs">
           {item.adults} adulto(s)
           {item.hasChildren && ` + ${item.childrenCount} criança(s)`}
         </p>
-        <p className="text-sm font-semibold text-[#075e54]">
+        <p className="text-white font-semibold text-sm">
           {formatCurrency(roomTotal)}
         </p>
         {item.extraGuests > 0 && (
-          <p className="text-xs text-gray-500">
+          <p className="text-gray-400 text-xs">
             Hóspede extra: {formatCurrency(extraGuestCost)} (R$ 102/dia)
           </p>
         )}
@@ -60,25 +60,27 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
       return;
     }
 
+    // ========= MENSAGEM PROFISSIONAL COM TÍTULOS EM NEGRITO =========
     const message = `
-🏨 *SOLICITAÇÃO DE RESERVA - HOTEL GRANJA BRASIL*
+*SOLICITAÇÃO DE RESERVA - HOTEL GRANJA BRASIL*
 
-👤 *Cliente:* ${customerName}
-📅 *Check-in:* ${startDate}
-📅 *Check-out:* ${endDate}
-🌙 *Noites:* ${nights}
+*Cliente:* ${customerName}
+*Check-in:* ${startDate}
+*Check-out:* ${endDate}
+*Noites:* ${nights}
 
 *Resumo das acomodações:*
 ${cart.map((item, i) => 
-  `• ${i+1}. ${item.room.descricao} - ${item.adults} adulto(s)${item.hasChildren ? ` + ${item.childrenCount} criança(s)` : ''}`
+  `${i+1}. ${item.room.descricao} - ${item.adults} adulto(s)${item.hasChildren ? ` + ${item.childrenCount} criança(s)` : ''}`
 ).join('\n')}
 
-💰 *Valores:*
-• Subtotal acomodações: ${formatCurrency(subtotal)}
-• Hóspedes extras: ${formatCurrency(totalExtraGuests)}
-• *TOTAL: ${formatCurrency(total)}*
+*Valores:*
+- Subtotal acomodações: ${formatCurrency(subtotal)}
+- Hóspedes extras: ${formatCurrency(totalExtraGuests)}
+- *TOTAL: ${formatCurrency(total)}*
 
-📝 Cliente interessado em fechar a reserva!
+Cliente interessado em fechar a reserva.
+Aguardamos retorno para confirmação.
     `.trim();
 
     const encoded = encodeURIComponent(message);
@@ -88,8 +90,8 @@ ${cart.map((item, i) =>
 
   return (
     <div className="bg-[#075e54] text-white rounded-lg p-4 shadow-lg">
-      <h3 className="text-xl font-bold mb-2">📋 Orçamento Final</h3>
-      <p className="text-sm opacity-90 mb-3">
+      <h3 className="text-xl font-bold mb-2">Orçamento Final</h3>
+      <p className="text-gray-300 text-sm mb-3">
         {startDate} a {endDate} · {nights} noite{nights > 1 ? 's' : ''}
       </p>
 
@@ -98,19 +100,19 @@ ${cart.map((item, i) =>
       </div>
 
       <div className="space-y-1 text-sm border-t border-white/20 pt-2">
-        <div className="flex justify-between">
+        <div className="flex justify-between text-gray-300">
           <span>Subtotal acomodações</span>
-          <span>{formatCurrency(subtotal)}</span>
+          <span className="text-white">{formatCurrency(subtotal)}</span>
         </div>
         {totalExtraGuests > 0 && (
-          <div className="flex justify-between">
+          <div className="flex justify-between text-gray-300">
             <span>Hóspedes extras</span>
-            <span>{formatCurrency(totalExtraGuests)}</span>
+            <span className="text-white">{formatCurrency(totalExtraGuests)}</span>
           </div>
         )}
         <div className="flex justify-between text-lg font-bold pt-1 border-t border-white/20">
-          <span>TOTAL</span>
-          <span>{formatCurrency(total)}</span>
+          <span className="text-white">TOTAL</span>
+          <span className="text-[#d4af37]">{formatCurrency(total)}</span>
         </div>
       </div>
 
@@ -120,12 +122,12 @@ ${cart.map((item, i) =>
           placeholder="Seu nome completo"
           value={customerName}
           onChange={(e) => setCustomerName(e.target.value)}
-          className="w-full p-2 rounded text-black text-sm placeholder-gray-400"
+          className="w-full p-2 rounded text-white bg-white/20 border border-white/30 placeholder-gray-300 text-sm focus:outline-none focus:border-white/50"
         />
       </div>
 
       <div className="flex gap-2 mt-3">
-        <Button variant="outline" onClick={onBack} className="flex-1 bg-white/10 text-white border-white/30">
+        <Button variant="outline" onClick={onBack} className="flex-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
           ↩️ Voltar
         </Button>
         <Button
@@ -133,11 +135,11 @@ ${cart.map((item, i) =>
           onClick={handleWhatsApp}
           className="flex-1"
         >
-          💬 WhatsApp
+          WhatsApp
         </Button>
       </div>
 
-      <p className="text-xs opacity-75 mt-2 text-center">
+      <p className="text-gray-400 text-xs mt-2 text-center">
         * Políticas: {HOTEL_CONFIG.politicas.cancelamento}
       </p>
     </div>

@@ -1,4 +1,3 @@
-import React from "react";
 export interface Room {
   codigo: string;
   descricao: string;
@@ -85,7 +84,7 @@ export interface QuoteData {
 
 export interface Message {
   id: string;
-  content: string | React.ReactNode;
+  content: string | JSX.Element;
   isUser: boolean;
   timestamp: Date;
 }
@@ -108,6 +107,7 @@ export type AppAction =
   | { type: 'REMOVE_FROM_CART'; payload: number }
   | { type: 'CLEAR_CART' }
   | { type: 'SET_AVAILABILITY'; payload: AvailabilityResponse | null }
+  | { type: 'UPDATE_AVAILABILITY'; payload: AvailabilityResponse | null }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CHECKING_AVAILABILITY'; payload: boolean }
   | { type: 'SET_QUOTE_DATA'; payload: QuoteData | null }
