@@ -30,7 +30,7 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
   availability,
   onAddToCart,
 }) => {
-  const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
+  const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [videoOpen, setVideoOpen] = useState(false);
   const [videoSrc, setVideoSrc] = useState('');
 
@@ -52,43 +52,19 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
     return minQty === Infinity ? 0 : minQty;
   };
 
-  const handleToggleRoom = (roomCode: string) => {
-    setSelectedQuantities(prev => {
-      const current = prev[roomCode] || 0;
-      const maxQty = getAvailableQuantity(roomCode);
-      if (current === 0) {
-        // Se não está selecionado, seleciona com 1
-        return { ...prev, [roomCode]: 1 };
-      } else {
-        // Se já está selecionado, desmarca (remove)
-        const newPrev = { ...prev };
-        delete newPrev[roomCode];
-        return newPrev;
-      }
-    });
-  };
-
   const handleQuantityChange = (roomCode: string, delta: number) => {
-    const current = selectedQuantities[roomCode] || 0;
-    const maxQty = getAvailableQuantity(roomCode);
-    const newQty = Math.max(0, Math.min(current + delta, maxQty));
-    if (newQty === 0) {
-      // Remove se for zero
-      const newPrev = { ...selectedQuantities };
-      delete newPrev[roomCode];
-      setSelectedQuantities(newPrev);
-    } else {
-      setSelectedQuantities(prev => ({ ...prev, [roomCode]: newQty }));
+    const available = getAvailableQuantity(roomCode);
+    const current = quantities[roomCode] || 0;
+    const newQty = Math.max(0, Math.min(available, current + delta));
+    if (newQty !== current) {
+      setQuantities(prev => ({ ...prev, [roomCode]: newQty }));
     }
   };
 
   const handleAddToCart = () => {
     const reservations: Reservation[] = [];
-    const entries = Object.entries(selectedQuantities);
-    for (const [roomCode, qty] of entries) {
-      if (qty <= 0) continue;
-      const room = rooms.find(r => r.codigo === roomCode);
-      if (!room) continue;
+    rooms.forEach(room => {
+      const qty = quantities[room.codigo] || 0;
       for (let i = 0; i < qty; i++) {
         const totalPerNight = room.valorMedio + extraGuests * 102;
         reservations.push({
@@ -104,12 +80,11 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
           totalPerNight,
         });
       }
-    }
-    if (reservations.length > 0) {
-      onAddToCart(reservations);
-      // Limpa seleções após adicionar
-      setSelectedQuantities({});
-    }
+    });
+    if (reservations.length === 0) return;
+    onAddToCart(reservations);
+    // reset quantities after adding
+    setQuantities({});
   };
 
   const getVideoFileName = (descricao: string): string => {
@@ -120,28 +95,24 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
     return '';
   };
 
-  // Total de quartos selecionados para exibir no botão
-  const totalSelected = Object.values(selectedQuantities).reduce((a, b) => a + b, 0);
+  const totalSelected = Object.values(quantities).reduce((a, b) => a + b, 0);
 
   return (
     <div className="mt-4 border-t pt-4">
       <h4 className="font-semibold text-[#075e54] mb-3">Selecione as acomodações:</h4>
-      <div className="space-y-3 max-h-60 overflow-y-auto">
+      <div className="space-y-2 max-h-60 overflow-y-auto">
         {rooms.map(room => {
+          const available = getAvailableQuantity(room.codigo);
+          const currentQty = quantities[room.codigo] || 0;
+          const isDisabled = available <= 0;
           const videoFile = getVideoFileName(room.descricao);
-          const availableQty = getAvailableQuantity(room.codigo);
-          const isDisabled = availableQty <= 0;
-          const selectedQty = selectedQuantities[room.codigo] || 0;
-          const isSelected = selectedQty > 0;
           const totalPerNight = room.valorMedio + extraGuests * 102;
 
           return (
             <div
               key={room.codigo}
-              className={`flex items-center p-3 border rounded-lg transition cursor-pointer ${
-                isSelected ? 'border-[#075e54] bg-green-50' : 'border-gray-200 hover:bg-gray-50'
-              } ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-              onClick={() => !isDisabled && handleToggleRoom(room.codigo)}
+              className={`flex items-center justify-between p-3 border rounded-lg transition ${isDisabled ? 'opacity-50 cursor-not-allowed bg-gray-100' : 'cursor-pointer hover:bg-gray-50'}`}
+              onClick={() => !isDisabled && handleQuantityChange(room.codigo, 1)}
             >
               <div className="flex-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -150,7 +121,7 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
                     {formatCurrency(totalPerNight)}/noite
                   </span>
                   <span className="text-xs text-gray-500">
-                    {availableQty} unidade{availableQty > 1 ? 's' : ''} disponível(is)
+                    {available} unidade{available > 1 ? 's' : ''} disponível(is)
                   </span>
                 </div>
                 {videoFile && (
@@ -166,25 +137,23 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
                   </button>
                 )}
               </div>
-              {!isDisabled && (
-                <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    className="w-8 h-8 rounded-full border border-gray-300 flex items-center justify-center hover:bg-gray-100 disabled:opacity-50"
-                    onClick={() => handleQuantityChange(room.codigo, -1)}
-                    disabled={selectedQty <= 0}
-                  >
-                    −
-                  </button>
-                  <span className="w-6 text-center font-medium">{selectedQty}</span>
-                  <button
-                    className="w-8 h-8 rounded-full border border-gray-300 flex items-center justify-center hover:bg-gray-100 disabled:opacity-50"
-                    onClick={() => handleQuantityChange(room.codigo, 1)}
-                    disabled={selectedQty >= availableQty}
-                  >
-                    +
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
+                <button
+                  className="w-8 h-8 rounded-full border border-gray-300 flex items-center justify-center text-lg font-bold hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => handleQuantityChange(room.codigo, -1)}
+                  disabled={currentQty <= 0}
+                >
+                  −
+                </button>
+                <span className="w-8 text-center font-medium">{currentQty}</span>
+                <button
+                  className="w-8 h-8 rounded-full border border-gray-300 flex items-center justify-center text-lg font-bold hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => handleQuantityChange(room.codigo, 1)}
+                  disabled={currentQty >= available}
+                >
+                  +
+                </button>
+              </div>
             </div>
           );
         })}
@@ -192,7 +161,7 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
 
       {totalSelected > 0 && (
         <Button variant="primary" onClick={handleAddToCart} className="w-full mt-3">
-          ➕ Incluir no orçamento ({totalSelected} quarto{totalSelected > 1 ? 's' : ''})
+          Incluir no orçamento ({totalSelected} unidade{totalSelected > 1 ? 's' : ''})
         </Button>
       )}
 

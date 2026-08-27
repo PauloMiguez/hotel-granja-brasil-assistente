@@ -50,6 +50,26 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
     dispatch({ type: 'REMOVE_FROM_CART', payload: index });
   };
 
+  // ========= VERIFICA SE HÁ DISPONIBILIDADE PARA ALGUMA CATEGORIA =========
+  const hasAvailability = (): boolean => {
+    if (!state.availability) return false;
+    const dates = getDatesBetween(firstReservation.startDate, firstReservation.endDate);
+    const roomCodes = ['SUP', 'SEN', 'MAS'];
+    
+    for (const code of roomCodes) {
+      let available = true;
+      for (const date of dates) {
+        const roomData = state.availability.wsrolRS.disponibilidadeRS.disponibilidade.result[code];
+        if (!roomData || roomData.diaria[date] === undefined || roomData.diaria[date] <= 0) {
+          available = false;
+          break;
+        }
+      }
+      if (available) return true;
+    }
+    return false;
+  };
+
   // Exibir disponibilidade restante
   const renderAvailability = () => {
     if (!state.availability) return null;
@@ -79,6 +99,8 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
       </div>
     );
   };
+
+  const hasAvailableRooms = hasAvailability();
 
   return (
     <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
@@ -128,8 +150,13 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
       </div>
 
       <div className="flex gap-2 mt-3">
-        <Button variant="outline" onClick={onAddMore} className="flex-1">
-          ➕ Adicionar mais
+        <Button 
+          variant="outline" 
+          onClick={onAddMore} 
+          className="flex-1"
+          disabled={!hasAvailableRooms}
+        >
+          {hasAvailableRooms ? '➕ Adicionar mais' : 'Sem disponibilidade'}
         </Button>
         <Button variant="primary" onClick={onFinalize} className="flex-1">
           Finalizar orçamento →
