@@ -34,7 +34,6 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
     const roomCode = removed.room.codigo;
     const dates = getDatesBetween(removed.startDate, removed.endDate);
 
-    // Restaurar disponibilidade
     if (state.availability) {
       const newAvailability = JSON.parse(JSON.stringify(state.availability));
       dates.forEach(date => {
@@ -46,16 +45,13 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
       dispatch({ type: 'SET_AVAILABILITY', payload: newAvailability });
     }
 
-    // Remover do carrinho
     dispatch({ type: 'REMOVE_FROM_CART', payload: index });
   };
 
-  // ========= VERIFICA SE HÁ DISPONIBILIDADE PARA ALGUMA CATEGORIA =========
   const hasAvailability = (): boolean => {
     if (!state.availability) return false;
     const dates = getDatesBetween(firstReservation.startDate, firstReservation.endDate);
     const roomCodes = ['SUP', 'SEN', 'MAS'];
-    
     for (const code of roomCodes) {
       let available = true;
       for (const date of dates) {
@@ -70,7 +66,6 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
     return false;
   };
 
-  // Exibir disponibilidade restante
   const renderAvailability = () => {
     if (!state.availability) return null;
     const dates = getDatesBetween(firstReservation.startDate, firstReservation.endDate);
@@ -115,6 +110,15 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
           const totalItem = item.totalPerNight * itemNights;
           subtotal += totalItem;
 
+          // Monta descritivo de crianças com idades
+          let childrenDesc = '';
+          if (item.hasChildren && item.childrenCount > 0) {
+            const ages = [];
+            if (item.childAge1 !== undefined) ages.push(item.childAge1);
+            if (item.childrenCount === 2 && item.childAge2 !== undefined) ages.push(item.childAge2);
+            childrenDesc = ` + ${item.childrenCount} criança(s) (${ages.join(' e ')} anos)`;
+          }
+
           return (
             <div
               key={index}
@@ -123,8 +127,7 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
               <div className="flex-1">
                 <p className="text-sm font-medium">{item.room.descricao}</p>
                 <p className="text-xs text-gray-500">
-                  {item.adults} adulto(s)
-                  {item.hasChildren && ` + ${item.childrenCount} criança(s)`}
+                  {item.adults} adulto(s){childrenDesc}
                 </p>
                 <p className="text-sm font-semibold text-[#075e54]">
                   {formatCurrency(totalItem)}
@@ -150,9 +153,9 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
       </div>
 
       <div className="flex gap-2 mt-3">
-        <Button 
-          variant="outline" 
-          onClick={onAddMore} 
+        <Button
+          variant="outline"
+          onClick={onAddMore}
           className="flex-1"
           disabled={!hasAvailableRooms}
         >

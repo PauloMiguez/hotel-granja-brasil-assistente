@@ -33,12 +33,20 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
     const extraGuestCost = item.extraGuests * 102 * itemNights;
     totalExtraGuests += extraGuestCost;
 
+    // Monta descritivo de crianças com idades
+    let childrenDesc = '';
+    if (item.hasChildren && item.childrenCount > 0) {
+      const ages = [];
+      if (item.childAge1 !== undefined) ages.push(item.childAge1);
+      if (item.childrenCount === 2 && item.childAge2 !== undefined) ages.push(item.childAge2);
+      childrenDesc = ` + ${item.childrenCount} criança(s) (${ages.join(' e ')} anos)`;
+    }
+
     return (
       <div key={idx} className="border-b border-white/20 py-3 last:border-0">
         <p className="font-medium text-white text-sm">{item.room.descricao}</p>
         <p className="text-gray-300 text-xs">
-          {item.adults} adulto(s)
-          {item.hasChildren && ` + ${item.childrenCount} criança(s)`}
+          {item.adults} adulto(s){childrenDesc}
         </p>
         <p className="text-white font-semibold text-sm">
           {formatCurrency(roomTotal)}
@@ -60,7 +68,18 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
       return;
     }
 
-    // ========= MENSAGEM PROFISSIONAL COM TÍTULOS EM NEGRITO =========
+    // Mensagem WhatsApp com idades das crianças
+    const cartSummary = cart.map((item, i) => {
+      let childrenDesc = '';
+      if (item.hasChildren && item.childrenCount > 0) {
+        const ages = [];
+        if (item.childAge1 !== undefined) ages.push(item.childAge1);
+        if (item.childrenCount === 2 && item.childAge2 !== undefined) ages.push(item.childAge2);
+        childrenDesc = ` + ${item.childrenCount} criança(s) (${ages.join(' e ')} anos)`;
+      }
+      return `${i+1}. ${item.room.descricao} - ${item.adults} adulto(s)${childrenDesc}`;
+    }).join('\n');
+
     const message = `
 *SOLICITAÇÃO DE RESERVA - HOTEL GRANJA BRASIL*
 
@@ -70,9 +89,7 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
 *Noites:* ${nights}
 
 *Resumo das acomodações:*
-${cart.map((item, i) => 
-  `${i+1}. ${item.room.descricao} - ${item.adults} adulto(s)${item.hasChildren ? ` + ${item.childrenCount} criança(s)` : ''}`
-).join('\n')}
+${cartSummary}
 
 *Valores:*
 - Subtotal acomodações: ${formatCurrency(subtotal)}

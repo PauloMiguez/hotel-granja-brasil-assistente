@@ -1,19 +1,18 @@
 import { getDatesBetween, calculateNights } from './dateUtils';
 import { MINLOS_DATA } from '../services/minlosData';
 
-export function validateGuests(adults: number, childrenCount: number, childAges: number[]): { 
-  valid: boolean; 
+export function validateGuests(adults: number, childrenCount: number, childAges: number[]): {
+  valid: boolean;
   message?: string;
-  payingChildren: number; 
+  payingChildren: number;
   totalGuests: number;
   payingGuests: number;
 } {
   const payingChildren = childAges.filter(age => age > 6).length;
-  const totalChildren = childAges.length;
+  const totalChildren = childrenCount;
   const payingGuests = adults + payingChildren;
   const totalGuests = adults + totalChildren;
 
-  // REGRA 1: HÓSPEDES PAGANTES (adultos + crianças > 6) - máximo 3
   if (payingGuests > 3) {
     return {
       valid: false,
@@ -24,7 +23,6 @@ export function validateGuests(adults: number, childrenCount: number, childAges:
     };
   }
 
-  // REGRA 2: TOTAL DE PESSOAS NA SUÍTE - máximo 4
   if (totalGuests > 4) {
     return {
       valid: false,
@@ -35,7 +33,6 @@ export function validateGuests(adults: number, childrenCount: number, childAges:
     };
   }
 
-  // REGRA 3: SE HOUVER CRIANÇAS, DEVE HAVER PELO MENOS 1 ADULTO
   if (totalChildren > 0 && adults === 0) {
     return {
       valid: false,
@@ -46,12 +43,8 @@ export function validateGuests(adults: number, childrenCount: number, childAges:
     };
   }
 
-  // REGRA 4: REMOVIDA - aviso sobre múltiplas crianças pequenas não é mais exibido
-  // pois a configuração é válida e a criança pode dormir na cama com os pais.
-
   return {
     valid: true,
-    message: undefined,
     payingChildren,
     totalGuests,
     payingGuests,
@@ -60,7 +53,7 @@ export function validateGuests(adults: number, childrenCount: number, childAges:
 
 export function isRoomValidForGuests(
   roomType: string,
-  adults: number,
+  _adults: number,
   childAges: number[],
   totalGuests: number,
   payingGuests: number
