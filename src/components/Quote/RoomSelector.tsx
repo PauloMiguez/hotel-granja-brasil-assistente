@@ -141,9 +141,9 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
 
   const getVideoFileName = (descricao: string): string => {
     const lower = descricao.toLowerCase();
-    if (lower.includes('apartamento superior')) return 'Apartamento Superior.mp4';
-    if (lower.includes('suite senior') || lower.includes('suíte sênior')) return 'Suíte Sênior.mp4';
-    if (lower.includes('suite master') || lower.includes('suíte master') || lower.includes('cobertura')) return 'Suíte Máster.mp4';
+    if (lower.includes('apartamento superior')) return '/videos/Apartamento Superior.mp4';
+    if (lower.includes('suite senior') || lower.includes('suíte sênior')) return '/videos/Suíte Sênior.mp4';
+    if (lower.includes('suite master') || lower.includes('suíte master') || lower.includes('cobertura')) return '/videos/Suíte Máster.mp4';
     return '';
   };
 
@@ -162,9 +162,8 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
           return (
             <div
               key={room.codigo}
-              className={`flex items-center justify-between p-3 border rounded-lg transition ${
-                isSelected ? 'border-[#075e54] bg-green-50' : 'border-gray-200 hover:bg-gray-50'
-              } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              className={`flex items-center justify-between p-3 border rounded-lg transition ${isSelected ? 'border-[#075e54] bg-green-50' : 'border-gray-200 hover:bg-gray-50'
+                } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
               onClick={() => !isDisabled && toggleSelect(room.codigo)}
             >
               <div className="flex-1">
