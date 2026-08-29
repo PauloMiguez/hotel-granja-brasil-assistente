@@ -159,7 +159,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       checkin: startDate,
       checkout: endDate,
       adultos: adults,
-      criancas: childrenCount,
+      criancas: hasChildren ? childrenCount : 0,
       idades: hasChildren ? (childrenCount === 1 ? [childAge1] : [childAge1, childAge2]) : [],
     });
 
