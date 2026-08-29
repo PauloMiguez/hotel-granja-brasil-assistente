@@ -230,7 +230,7 @@ export const AdminPanel: React.FC = () => {
                 </div>
             </div>
 
-            {/* ========= JORNADAS DOS CLIENTES (COM DETALHES E ORDEM CRONOLÓGICA) ========= */}
+            {/* ========= JORNADAS DOS CLIENTES (ORDEM CRONOLÓGICA E DETALHES POR EVENTO) ========= */}
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
                 {(() => {
@@ -245,18 +245,19 @@ export const AdminPanel: React.FC = () => {
                     // Ordena sessões pela data do último evento (mais recente primeiro)
                     const sortedSessions = Object.entries(sessions)
                         .map(([sessionId, events]) => {
-                            // 🔥 CORREÇÃO: ordena eventos do mais antigo para o mais recente
+                            // 🔥 ORDENAÇÃO CRONOLÓGICA (mais antigo → mais recente)
                             events.sort((a, b) => {
-                                const timeA = new Date(a.timestamp).getTime();
-                                const timeB = new Date(b.timestamp).getTime();
-                                return timeA - timeB; // antigo → novo
+                                const dateA = new Date(a.timestamp);
+                                const dateB = new Date(b.timestamp);
+                                // Fallback: se alguma data for inválida, usa 0
+                                return (dateA.getTime() || 0) - (dateB.getTime() || 0);
                             });
                             return { sessionId, events };
                         })
                         .sort((a, b) => {
                             const aTime = a.events[a.events.length - 1]?.timestamp || '';
                             const bTime = b.events[b.events.length - 1]?.timestamp || '';
-                            return new Date(bTime).getTime() - new Date(aTime).getTime(); // mais recente primeiro
+                            return new Date(bTime).getTime() - new Date(aTime).getTime();
                         });
 
                     if (sortedSessions.length === 0) {
@@ -296,15 +297,7 @@ export const AdminPanel: React.FC = () => {
                                     statusColor = 'bg-red-100 text-red-700';
                                 }
 
-                                // Extrai o primeiro evento de consulta para obter detalhes
-                                const firstConsulta = events.find(e => e.event === 'consulta_iniciada');
-                                let details = '';
-                                if (firstConsulta?.data) {
-                                    const d = firstConsulta.data;
-                                    details = `Check-in: ${d.checkin || '-'} | ${d.adultos || 0} adulto(s)`;
-                                    if (d.criancas) details += ` + ${d.criancas} criança(s)`;
-                                }
-
+                                // Data do último evento
                                 const lastEvent = events[events.length - 1];
                                 const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
 
@@ -315,7 +308,6 @@ export const AdminPanel: React.FC = () => {
                                             <div className="flex items-center gap-3">
                                                 <span className="font-mono text-xs text-[#1e293b] bg-gray-100 px-2 py-1 rounded">{shortId}</span>
                                                 <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor}`}>{status}</span>
-                                                {details && <span className="text-xs text-gray-600">{details}</span>}
                                             </div>
                                             <span className="text-xs text-gray-400">{lastTime}</span>
                                         </div>
@@ -326,12 +318,16 @@ export const AdminPanel: React.FC = () => {
                                                 const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString('pt-BR') : '';
                                                 let detail = '';
                                                 let icon = '';
+
+                                                // 🔥 Cada evento mostra seus próprios dados, sem herdar de outros
                                                 switch (ev.event) {
                                                     case 'consulta_iniciada':
                                                         icon = '🔍';
                                                         const d = ev.data;
                                                         detail = `Check-in: ${d?.checkin || '-'} | ${d?.adultos || 0} adulto(s)`;
-                                                        if (d?.criancas) detail += ` + ${d.criancas} criança(s)`;
+                                                        if (d?.criancas && d.criancas > 0) {
+                                                            detail += ` + ${d.criancas} criança(s)`;
+                                                        }
                                                         break;
                                                     case 'consulta_sucesso':
                                                         icon = '✅';
@@ -361,6 +357,7 @@ export const AdminPanel: React.FC = () => {
                                                         icon = '📌';
                                                         detail = ev.event;
                                                 }
+
                                                 return (
                                                     <div key={idx} className="flex items-center gap-3 text-xs text-gray-600 border-b border-gray-100 pb-1 last:border-0">
                                                         <span>{icon}</span>
