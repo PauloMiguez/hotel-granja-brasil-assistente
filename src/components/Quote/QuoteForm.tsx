@@ -19,6 +19,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   const [view, setView] = useState<'form' | 'cart' | 'final'>('form');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [originalStartDate, setOriginalStartDate] = useState('');
+  const [originalEndDate, setOriginalEndDate] = useState('');
   const [adults, setAdults] = useState(2);
   const [hasChildren, setHasChildren] = useState(false);
   const [childrenCount, setChildrenCount] = useState(1);
@@ -32,12 +34,44 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   useEffect(() => {
     const tomorrow = getTomorrowDate();
     setStartDate(tomorrow);
+    setOriginalStartDate(tomorrow);
     const end = new Date(tomorrow);
     end.setDate(end.getDate() + 2);
-    setEndDate(end.toISOString().split('T')[0]);
+    const endStr = end.toISOString().split('T')[0];
+    setEndDate(endStr);
+    setOriginalEndDate(endStr);
   }, []);
 
-  // Validação em tempo real (desabilita o botão se inválido)
+  // Se o carrinho já tem itens, trava as datas para o período da primeira reserva
+  useEffect(() => {
+    if (state.cart.length > 0) {
+      const first = state.cart[0];
+      if (first.startDate && first.endDate) {
+        if (startDate !== first.startDate || endDate !== first.endDate) {
+          setStartDate(first.startDate);
+          setEndDate(first.endDate);
+          setOriginalStartDate(first.startDate);
+          setOriginalEndDate(first.endDate);
+        }
+      }
+    } else {
+      if (!originalStartDate || !originalEndDate) {
+        const tomorrow = getTomorrowDate();
+        setStartDate(tomorrow);
+        setOriginalStartDate(tomorrow);
+        const end = new Date(tomorrow);
+        end.setDate(end.getDate() + 2);
+        const endStr = end.toISOString().split('T')[0];
+        setEndDate(endStr);
+        setOriginalEndDate(endStr);
+      } else {
+        setStartDate(originalStartDate);
+        setEndDate(originalEndDate);
+      }
+    }
+  }, [state.cart, startDate, endDate, originalStartDate, originalEndDate]);
+
+  // Validação em tempo real
   useEffect(() => {
     const childAges = hasChildren
       ? (childrenCount === 1 ? [childAge1] : [childAge1, childAge2])
@@ -46,7 +80,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     if (!validation.valid) {
       setError(validation.message || 'Configuração de hóspedes inválida.');
     } else if (validation.message) {
-      // Aviso (não bloqueia)
       setError(validation.message);
     } else {
       setError('');
@@ -77,6 +110,14 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       return;
     }
 
+    if (state.cart.length > 0) {
+      const first = state.cart[0];
+      if (first.startDate !== startDate || first.endDate !== endDate) {
+        setError('Não é possível alterar o período pois já há reservas em andamento. Para mudar o período, esvazie o carrinho primeiro.');
+        return;
+      }
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     if (new Date(startDate) <= today) {
@@ -88,7 +129,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       return;
     }
 
-    // ========= VALIDAÇÃO DE CAPACIDADE =========
     const childAges = hasChildren
       ? (childrenCount === 1 ? [childAge1] : [childAge1, childAge2])
       : [];
@@ -117,9 +157,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
 
       const ratesData = await fetchHotelRates(formattedStart, formattedEnd);
 
-      // Filtra quartos usando a validação correta
       const availableRooms = ratesData.data.dataFormatted.filter(room => {
-        // Verifica disponibilidade para todas as datas
         const dates = getDatesBetween(startDate, endDate);
         const isAvailable = dates.every(date => {
           const roomData = adjustedAvailability.wsrolRS.disponibilidadeRS.disponibilidade.result[room.codigo];
@@ -127,7 +165,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         });
         if (!isAvailable) return false;
 
-        // Verifica regras de capacidade do quarto
         const roomCheck = isRoomValidForGuests(
           room.descricao,
           adults,
@@ -135,10 +172,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
           guestValidation.totalGuests,
           guestValidation.payingGuests
         );
-        if (!roomCheck.valid) {
-          console.log(`❌ ${room.descricao} bloqueado: ${roomCheck.reason}`);
-          return false;
-        }
+        if (!roomCheck.valid) return false;
         return true;
       });
 
@@ -150,9 +184,14 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         return;
       }
 
+      if (state.cart.length === 0) {
+        setOriginalStartDate(startDate);
+        setOriginalEndDate(endDate);
+      }
+
       dispatch({ type: 'SET_SELECTED_ROOMS', payload: availableRooms });
       setShowRoomSelector(true);
-      setError(''); // Limpa qualquer erro residual
+      setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao consultar disponibilidade.');
       setShowRoomSelector(false);
@@ -162,7 +201,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     }
   };
 
-  // ========= ADICIONAR AO CARRINHO =========
   const handleAddToCart = (reservations: any[]) => {
     if (reservations.length === 0) return;
     reservations.forEach(res => {
@@ -187,13 +225,10 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     setError('');
   };
 
-  // ========= VOLTAR AO FORMULÁRIO (ADICIONAR MAIS) =========
   const handleAddMore = () => {
     setView('form');
     setShowRoomSelector(false);
     setError('');
-    // Recarrega a disponibilidade
-    handleCheckAvailability();
   };
 
   // Views
@@ -216,6 +251,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   }
 
   // Formulário
+  const hasCartItems = state.cart.length > 0;
+
   return (
     <div className="w-full">
       {onClose && (
@@ -227,19 +264,31 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       <p className="text-sm text-gray-600 mb-4">Preencha os dados abaixo para consultar disponibilidade em tempo real.</p>
 
       <div className="space-y-4">
-        {/* Datas */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-gray-700">Check-in</label>
-            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} min={getTomorrowDate()} className="w-full p-2 border border-gray-300 rounded-md text-sm" />
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              min={getTomorrowDate()}
+              disabled={hasCartItems}
+              className={`w-full p-2 border border-gray-300 rounded-md text-sm ${hasCartItems ? 'bg-gray-100 cursor-not-allowed' : 'focus:border-[#075e54] focus:outline-none'}`}
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Check-out</label>
-            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} min={startDate || getTomorrowDate()} className="w-full p-2 border border-gray-300 rounded-md text-sm" />
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              min={startDate || getTomorrowDate()}
+              disabled={hasCartItems}
+              className={`w-full p-2 border border-gray-300 rounded-md text-sm ${hasCartItems ? 'bg-gray-100 cursor-not-allowed' : 'focus:border-[#075e54] focus:outline-none'}`}
+            />
           </div>
         </div>
 
-        {/* Adultos */}
         <div>
           <label className="block text-sm font-medium text-gray-700">Adultos</label>
           <select value={adults} onChange={(e) => setAdults(Number(e.target.value))} className="w-full p-2 border border-gray-300 rounded-md text-sm">
@@ -249,7 +298,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
           </select>
         </div>
 
-        {/* Crianças */}
         <div className="border-t pt-4">
           <label className="block text-sm font-medium text-gray-700 mb-2">👶 Crianças (até 17 anos)</label>
           <div className="space-y-2">
@@ -283,14 +331,12 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
           </div>
         </div>
 
-        {/* Mensagem de erro ou aviso */}
         {error && (
           <div className={`text-sm p-2 rounded ${error.includes('Atenção') ? 'text-yellow-700 bg-yellow-50' : 'text-red-600 bg-red-50'}`}>
             {error}
           </div>
         )}
 
-        {/* Botão de consulta (desabilitado se houver erro grave) */}
         <Button
           variant="primary"
           onClick={handleCheckAvailability}
