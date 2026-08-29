@@ -71,7 +71,6 @@ export const AdminPanel: React.FC = () => {
           return;
         }
       }
-      // Fallback para localStorage
       const localData = getLocalTrackingStats();
       if (localData) {
         const currentStr = JSON.stringify(trackingEvents);
@@ -232,7 +231,7 @@ export const AdminPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* ========= JORNADAS DOS CLIENTES (ORDEM CRONOLÓGICA CORRIGIDA) ========= */}
+      {/* ========= JORNADAS DOS CLIENTES (ORDENAÇÃO POR STRING ISO) ========= */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
       <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
         {(() => {
@@ -243,21 +242,22 @@ export const AdminPanel: React.FC = () => {
             sessions[ev.sessionId].push(ev);
           });
 
-          // Ordena eventos dentro de cada sessão (do mais antigo para o mais novo)
           const sortedSessions = Object.entries(sessions)
             .map(([sessionId, events]) => {
+              // 🔥 ORDENAÇÃO POR STRING ISO (lexicográfica)
               events.sort((a, b) => {
-                // Usa Date.parse para maior robustez
-                const timeA = Date.parse(a.timestamp);
-                const timeB = Date.parse(b.timestamp);
-                return (isNaN(timeA) ? 0 : timeA) - (isNaN(timeB) ? 0 : timeB);
+                if (a.timestamp < b.timestamp) return -1;
+                if (a.timestamp > b.timestamp) return 1;
+                return 0;
               });
               return { sessionId, events };
             })
             .sort((a, b) => {
-              const timeA = Date.parse(a.events[a.events.length - 1]?.timestamp || '');
-              const timeB = Date.parse(b.events[b.events.length - 1]?.timestamp || '');
-              return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+              const aTime = a.events[a.events.length - 1]?.timestamp || '';
+              const bTime = b.events[b.events.length - 1]?.timestamp || '';
+              if (bTime < aTime) return -1;
+              if (bTime > aTime) return 1;
+              return 0;
             });
 
           if (sortedSessions.length === 0) {
@@ -405,7 +405,6 @@ export const AdminPanel: React.FC = () => {
   );
 };
 
-// ========= COMPONENTES AUXILIARES =========
 const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({ label, value, suffix = '' }) => (
   <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#1e293b]">
     <div className="text-2xl font-bold text-[#1e293b]">{value}{suffix}</div>
