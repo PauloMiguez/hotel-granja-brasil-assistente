@@ -235,7 +235,7 @@ export const AdminPanel: React.FC = () => {
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
                 {(() => {
-                    // Agrupa eventos por sessionId (ignorando testes)
+                    // Filtra eventos de teste e agrupa por sessionId
                     const sessions: Record<string, TrackingEvent[]> = {};
                     trackingEvents.forEach(ev => {
                         if (ev.event === 'teste_final' || ev.event === 'diagnostico' || ev.event === 'teste') return;
@@ -243,18 +243,21 @@ export const AdminPanel: React.FC = () => {
                         sessions[ev.sessionId].push(ev);
                     });
 
-                    // Ordena eventos de cada sessão (do mais antigo para o mais novo)
+                    // Ordena sessões pela data do último evento (mais recente primeiro)
                     const sortedSessions = Object.entries(sessions)
                         .map(([sessionId, events]) => {
-                            // 🔥 ORDENAÇÃO POR STRING ISO (localeCompare) - seguro e rápido
-                            events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+                            // 🔥 ORDENAÇÃO CRONOLÓGICA POR TIMESTAMP (usando getTime)
+                            events.sort((a, b) => {
+                                const ta = new Date(a.timestamp).getTime();
+                                const tb = new Date(b.timestamp).getTime();
+                                return ta - tb; // do mais antigo para o mais novo
+                            });
                             return { sessionId, events };
                         })
                         .sort((a, b) => {
-                            // Ordena sessões pelo timestamp do último evento (mais recente primeiro)
-                            const aTime = a.events[a.events.length - 1]?.timestamp || '';
-                            const bTime = b.events[b.events.length - 1]?.timestamp || '';
-                            return bTime.localeCompare(aTime);
+                            const aTime = new Date(a.events[a.events.length - 1]?.timestamp).getTime();
+                            const bTime = new Date(b.events[b.events.length - 1]?.timestamp).getTime();
+                            return bTime - aTime; // mais recente primeiro
                         });
 
                     if (sortedSessions.length === 0) {
@@ -268,7 +271,7 @@ export const AdminPanel: React.FC = () => {
                                     ? sessionId.substring(0, 15) + '...'
                                     : sessionId;
 
-                                // Status geral da jornada (baseado nos eventos)
+                                // Status geral da jornada
                                 const hasWhatsApp = events.some(e => e.event === 'whatsapp_enviado');
                                 const hasAbandono = events.some(e => e.event === 'abandono');
                                 const hasCarrinho = events.some(e => e.event === 'carrinho_adicionado');
@@ -298,20 +301,30 @@ export const AdminPanel: React.FC = () => {
                                 const lastEvent = events[events.length - 1];
                                 const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
 
-                                // 🔥 REMOVIDO os detalhes do cabeçalho (evita duplicação)
+                                // 🔥 Detalhes da consulta (apenas para exibição no cabeçalho, sem repetir)
+                                const consulta = events.find(e => e.event === 'consulta_iniciada');
+                                let details = '';
+                                if (consulta?.data) {
+                                    const d = consulta.data;
+                                    details = `Check-in: ${d.checkin || '-'} | Check-out: ${d.checkout || '-'} | ${d.adultos || 0} adulto(s)`;
+                                    if (d.criancas && d.criancas > 0) {
+                                        details += ` + ${d.criancas} criança(s)`;
+                                    }
+                                }
 
                                 return (
                                     <div key={sessionId} className="p-4 hover:bg-gray-50">
-                                        {/* Cabeçalho da sessão (sem detalhes da consulta) */}
+                                        {/* Cabeçalho da sessão (apenas uma vez) */}
                                         <div className="flex items-center justify-between mb-2">
                                             <div className="flex items-center gap-3">
                                                 <span className="font-mono text-xs text-[#1e293b] bg-gray-100 px-2 py-1 rounded">{shortId}</span>
                                                 <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor}`}>{status}</span>
+                                                {details && <span className="text-xs text-gray-600 hidden sm:inline">{details}</span>}
                                             </div>
                                             <span className="text-xs text-gray-400">{lastTime}</span>
                                         </div>
 
-                                        {/* Lista de eventos em ordem cronológica */}
+                                        {/* Lista de eventos EM ORDEM CRONOLÓGICA (já ordenada acima) */}
                                         <div className="ml-4 space-y-1">
                                             {events.map((ev, idx) => {
                                                 const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString('pt-BR') : '';
@@ -376,7 +389,6 @@ export const AdminPanel: React.FC = () => {
                     );
                 })()}
             </div>
-
             {/* Conversas */}
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden">
