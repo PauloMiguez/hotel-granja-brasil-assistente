@@ -39,6 +39,7 @@ export const AdminPanel: React.FC = () => {
   const [error, setError] = useState('');
   const [eventFilter, setEventFilter] = useState<string>('all');
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // ========= BUSCAR CONVERSAS =========
   const fetchConversations = async () => {
@@ -53,35 +54,51 @@ export const AdminPanel: React.FC = () => {
     } catch (e) {
       console.error(e);
       setError('Erro ao carregar conversas');
-    } finally {
-      setLoading(false);
     }
   };
 
   // ========= BUSCAR TRACKING =========
   const fetchTrackingStats = useCallback(async () => {
     try {
-      // 1. Mostra dados locais imediatamente (fallback)
-      const localData = getLocalTrackingStats();
-      if (localData) {
-        setTrackingStats(localData.stats);
-        setTrackingEvents(localData.events);
-      }
-
-      // 2. Tenta buscar do servidor
       const res = await fetch(`${WORKER_URL}/tracking-stats`);
       if (res.ok) {
         const data = await res.json();
-        if (data.success && data.events && data.events.length > 0) {
-          setTrackingStats(data.stats);
-          setTrackingEvents(data.events);
+        if (data.success && data.events) {
+          const currentStr = JSON.stringify(trackingEvents);
+          const newStr = JSON.stringify(data.events);
+          if (currentStr !== newStr) {
+            setTrackingStats(data.stats);
+            setTrackingEvents(data.events);
+            setLastUpdate(new Date());
+          }
+          return;
+        }
+      }
+      // Fallback para localStorage
+      const localData = getLocalTrackingStats();
+      if (localData) {
+        const currentStr = JSON.stringify(trackingEvents);
+        const newStr = JSON.stringify(localData.events);
+        if (currentStr !== newStr) {
+          setTrackingStats(localData.stats);
+          setTrackingEvents(localData.events);
           setLastUpdate(new Date());
         }
       }
     } catch (e) {
       console.warn('Erro ao buscar tracking do servidor:', e);
+      const localData = getLocalTrackingStats();
+      if (localData) {
+        const currentStr = JSON.stringify(trackingEvents);
+        const newStr = JSON.stringify(localData.events);
+        if (currentStr !== newStr) {
+          setTrackingStats(localData.stats);
+          setTrackingEvents(localData.events);
+          setLastUpdate(new Date());
+        }
+      }
     }
-  }, []);
+  }, [trackingEvents]);
 
   const parseConversations = (docs: any[]): Conversation[] => {
     return docs.map((doc: any) => {
@@ -126,14 +143,22 @@ export const AdminPanel: React.FC = () => {
     } catch { return null; }
   };
 
+  // Carrega dados apenas uma vez na montagem
   useEffect(() => {
-    fetchConversations();
-    fetchTrackingStats();
-    const interval = setInterval(() => {
-      fetchTrackingStats();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [fetchTrackingStats]);
+    const loadData = async () => {
+      setLoading(true);
+      await Promise.all([fetchConversations(), fetchTrackingStats()]);
+      setLoading(false);
+    };
+    loadData();
+  }, []);
+
+  // ========= ATUALIZAÇÃO MANUAL =========
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await Promise.all([fetchConversations(), fetchTrackingStats()]);
+    setIsRefreshing(false);
+  };
 
   // ========= FILTRO POR EVENTO =========
   const filteredEvents = trackingEvents.filter(ev => 
@@ -179,8 +204,12 @@ export const AdminPanel: React.FC = () => {
       <header className="bg-[#1e293b] text-white p-4 rounded-lg mb-4 flex justify-between items-center flex-wrap gap-3">
         <h1 className="text-2xl font-bold">🏨 Painel Administrativo</h1>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={() => { fetchConversations(); fetchTrackingStats(); }} className="bg-white/20 px-4 py-2 rounded hover:bg-white/30">
-            🔄 Atualizar
+          <button 
+            onClick={handleRefresh} 
+            disabled={isRefreshing}
+            className="bg-white/20 px-4 py-2 rounded hover:bg-white/30 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isRefreshing ? '🔄 Atualizando...' : '🔄 Atualizar'}
           </button>
           <button onClick={exportCSV} className="bg-white/20 px-4 py-2 rounded hover:bg-white/30">
             📥 CSV
