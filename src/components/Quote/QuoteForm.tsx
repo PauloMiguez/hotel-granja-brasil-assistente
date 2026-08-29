@@ -156,7 +156,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
 
     // Tracking: consulta iniciada
     trackEvent('consulta_iniciada', {
-      checkin: startDate,
+      checkin: startDate, 
       checkout: endDate,
       adultos: adults,
       criancas: hasChildren ? childrenCount : 0,

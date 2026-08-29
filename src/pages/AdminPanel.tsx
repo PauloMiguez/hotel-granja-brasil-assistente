@@ -159,7 +159,7 @@ export const AdminPanel: React.FC = () => {
       .map(ev => {
         let detail = '';
         if (ev.event === 'consulta_iniciada' && ev.data) {
-          detail = `Check-in: ${ev.data.checkin || '-'} | ${ev.data.adultos || 0} adulto(s)`;
+          detail = `Check-in: ${ev.data.checkin || '-'} | ${ev.data.checkout || '-'} | ${ev.data.adultos || 0} adulto(s)`;
           if (ev.data.criancas) detail += ` + ${ev.data.criancas} criança(s)`;
         } else if (ev.event === 'carrinho_adicionado' && ev.data) {
           detail = `${ev.data.quantidade || 0} quarto(s)`;
@@ -235,7 +235,6 @@ export const AdminPanel: React.FC = () => {
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
       <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
         {(() => {
-          // Filtra eventos de teste e agrupa por sessionId
           const sessions: Record<string, TrackingEvent[]> = {};
           trackingEvents.forEach(ev => {
             if (ev.event === 'teste_final' || ev.event === 'diagnostico' || ev.event === 'teste') return;
@@ -243,21 +242,20 @@ export const AdminPanel: React.FC = () => {
             sessions[ev.sessionId].push(ev);
           });
 
-          // Ordena eventos de cada sessão por timestamp (crescente)
           const sortedSessions = Object.entries(sessions)
             .map(([sessionId, events]) => {
-              // 🔥 CORREÇÃO: ordenação por getTime()
+              // Ordenação por timestamp numérico
               events.sort((a, b) => {
-                const timeA = new Date(a.timestamp).getTime();
-                const timeB = new Date(b.timestamp).getTime();
-                return timeA - timeB;
+                const ta = new Date(a.timestamp).getTime();
+                const tb = new Date(b.timestamp).getTime();
+                return ta - tb;
               });
               return { sessionId, events };
             })
             .sort((a, b) => {
-              const aTime = new Date(a.events[a.events.length - 1]?.timestamp).getTime();
-              const bTime = new Date(b.events[b.events.length - 1]?.timestamp).getTime();
-              return bTime - aTime; // mais recente primeiro
+              const ta = new Date(a.events[a.events.length - 1]?.timestamp).getTime();
+              const tb = new Date(b.events[b.events.length - 1]?.timestamp).getTime();
+              return tb - ta;
             });
 
           if (sortedSessions.length === 0) {
@@ -299,12 +297,24 @@ export const AdminPanel: React.FC = () => {
                 const lastEvent = events[events.length - 1];
                 const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
 
+                // Extrai detalhes da primeira consulta (check-in, checkout, adultos, crianças)
+                const firstConsulta = events.find(e => e.event === 'consulta_iniciada');
+                let details = '';
+                if (firstConsulta?.data) {
+                  const d = firstConsulta.data;
+                  details = `Check-in: ${d.checkin || '-'} | Check-out: ${d.checkout || '-'} | ${d.adultos || 0} adulto(s)`;
+                  if (d.criancas && d.criancas > 0) {
+                    details += ` + ${d.criancas} criança(s)`;
+                  }
+                }
+
                 return (
                   <div key={sessionId} className="p-4 hover:bg-gray-50">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-3">
                         <span className="font-mono text-xs text-[#1e293b] bg-gray-100 px-2 py-1 rounded">{shortId}</span>
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor}`}>{status}</span>
+                        {details && <span className="text-xs text-gray-600">{details}</span>}
                       </div>
                       <span className="text-xs text-gray-400">{lastTime}</span>
                     </div>
@@ -318,7 +328,7 @@ export const AdminPanel: React.FC = () => {
                           case 'consulta_iniciada':
                             icon = '🔍';
                             const d = ev.data;
-                            detail = `Check-in: ${d?.checkin || '-'} | ${d?.adultos || 0} adulto(s)`;
+                            detail = `Check-in: ${d?.checkin || '-'} | Check-out: ${d?.checkout || '-'} | ${d?.adultos || 0} adulto(s)`;
                             if (d?.criancas && d.criancas > 0) {
                               detail += ` + ${d.criancas} criança(s)`;
                             }

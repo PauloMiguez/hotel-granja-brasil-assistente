@@ -5,18 +5,47 @@ interface TrackingEvent {
   sessionId: string;
 }
 
+// ========= CONFIGURAÇÃO DE SESSÃO =========
+const SESSION_TIMEOUT = 10 * 60 * 1000; // 10 minutos
+
 function getSessionId(): string {
-  let sessionId = localStorage.getItem('tracking_session_id');
-  if (!sessionId) {
-    sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    localStorage.setItem('tracking_session_id', sessionId);
-  }
-  return sessionId;
+  try {
+    const stored = localStorage.getItem('tracking_session_data');
+    if (stored) {
+      const { sessionId, lastEventTime } = JSON.parse(stored);
+      const now = Date.now();
+      // Se passou mais que SESSION_TIMEOUT desde o último evento, renova
+      if (now - lastEventTime < SESSION_TIMEOUT) {
+        return sessionId;
+      }
+    }
+  } catch (e) {}
+  // Gera nova sessão
+  const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  localStorage.setItem('tracking_session_data', JSON.stringify({
+    sessionId: newSessionId,
+    lastEventTime: Date.now()
+  }));
+  return newSessionId;
+}
+
+function updateSessionTimestamp(): void {
+  try {
+    const stored = localStorage.getItem('tracking_session_data');
+    if (stored) {
+      const data = JSON.parse(stored);
+      data.lastEventTime = Date.now();
+      localStorage.setItem('tracking_session_data', JSON.stringify(data));
+    }
+  } catch (e) {}
 }
 
 export function trackEvent(event: string, data: Record<string, any> = {}): void {
   try {
     const sessionId = getSessionId();
+    // Atualiza timestamp da sessão
+    updateSessionTimestamp();
+
     const eventData: TrackingEvent = {
       event,
       timestamp: new Date().toISOString(),
@@ -30,11 +59,13 @@ export function trackEvent(event: string, data: Record<string, any> = {}): void 
 
     console.log(`📊 [Tracking] ${event}`, eventData);
 
+    // Salva localmente
     const history = getTrackingHistory();
     history.push(eventData);
     if (history.length > 500) history.splice(0, history.length - 500);
     localStorage.setItem('tracking_history', JSON.stringify(history));
 
+    // Envia para o Worker
     sendEventToWorker(eventData).catch(() => {});
   } catch (error) {
     console.warn('Erro ao registrar evento de tracking:', error);
@@ -44,28 +75,15 @@ export function trackEvent(event: string, data: Record<string, any> = {}): void 
 async function sendEventToWorker(eventData: TrackingEvent): Promise<void> {
   try {
     const baseUrl = import.meta.env.VITE_AI_API_URL;
-    if (!baseUrl) {
-      console.warn('⚠️ VITE_AI_API_URL não definida');
-      return;
-    }
-    // Remove barra dupla
+    if (!baseUrl) return;
     const url = baseUrl.replace(/\/$/, '') + '/track';
-    
-    // Garante sessionId
-    const payload = {
-      ...eventData,
-      sessionId: eventData.sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    };
-
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(eventData),
     });
-    
     if (!response.ok) {
-      const errorText = await response.text();
-      console.warn(`❌ Tracking worker respondeu com ${response.status}: ${errorText}`);
+      console.warn(`❌ Tracking worker respondeu com ${response.status}: ${await response.text()}`);
     }
   } catch (error) {
     console.warn('❌ Erro ao enviar tracking para o worker:', error);
