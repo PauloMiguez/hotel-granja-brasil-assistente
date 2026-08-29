@@ -37,8 +37,6 @@ export const AdminPanel: React.FC = () => {
   const [trackingEvents, setTrackingEvents] = useState<TrackingEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [eventFilter, setEventFilter] = useState<string>('all');
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // ========= BUSCAR CONVERSAS =========
@@ -69,7 +67,6 @@ export const AdminPanel: React.FC = () => {
           if (currentStr !== newStr) {
             setTrackingStats(data.stats);
             setTrackingEvents(data.events);
-            setLastUpdate(new Date());
           }
           return;
         }
@@ -82,7 +79,6 @@ export const AdminPanel: React.FC = () => {
         if (currentStr !== newStr) {
           setTrackingStats(localData.stats);
           setTrackingEvents(localData.events);
-          setLastUpdate(new Date());
         }
       }
     } catch (e) {
@@ -94,7 +90,6 @@ export const AdminPanel: React.FC = () => {
         if (currentStr !== newStr) {
           setTrackingStats(localData.stats);
           setTrackingEvents(localData.events);
-          setLastUpdate(new Date());
         }
       }
     }
@@ -159,9 +154,6 @@ export const AdminPanel: React.FC = () => {
     await Promise.all([fetchConversations(), fetchTrackingStats()]);
     setIsRefreshing(false);
   };
-
-  // ========= FILTRO POR EVENTO (para uso futuro) =========
-  // Mantido para compatibilidade, mas a tabela de jornadas usa todos os eventos
 
   // ========= EXPORTAR CSV =========
   const exportCSV = () => {
