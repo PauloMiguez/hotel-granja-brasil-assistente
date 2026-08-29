@@ -246,19 +246,15 @@ export const AdminPanel: React.FC = () => {
                     // Ordena eventos de cada sessão (do mais antigo para o mais novo)
                     const sortedSessions = Object.entries(sessions)
                         .map(([sessionId, events]) => {
-                            // 🔥 ORDENAÇÃO POR TIMESTAMP (getTime) - garantida
-                            events.sort((a, b) => {
-                                const ta = new Date(a.timestamp).getTime();
-                                const tb = new Date(b.timestamp).getTime();
-                                return ta - tb;
-                            });
+                            // 🔥 ORDENAÇÃO POR STRING ISO (localeCompare) - seguro e rápido
+                            events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
                             return { sessionId, events };
                         })
                         .sort((a, b) => {
                             // Ordena sessões pelo timestamp do último evento (mais recente primeiro)
-                            const ta = new Date(a.events[a.events.length - 1]?.timestamp).getTime();
-                            const tb = new Date(b.events[b.events.length - 1]?.timestamp).getTime();
-                            return tb - ta;
+                            const aTime = a.events[a.events.length - 1]?.timestamp || '';
+                            const bTime = b.events[b.events.length - 1]?.timestamp || '';
+                            return bTime.localeCompare(aTime);
                         });
 
                     if (sortedSessions.length === 0) {
@@ -302,25 +298,15 @@ export const AdminPanel: React.FC = () => {
                                 const lastEvent = events[events.length - 1];
                                 const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
 
-                                // 🔥 Detalhes da consulta (extraídos do evento 'consulta_iniciada')
-                                const consulta = events.find(e => e.event === 'consulta_iniciada');
-                                let details = '';
-                                if (consulta?.data) {
-                                    const d = consulta.data;
-                                    details = `Check-in: ${d.checkin || '-'} | Check-out: ${d.checkout || '-'} | ${d.adultos || 0} adulto(s)`;
-                                    if (d.criancas && d.criancas > 0) {
-                                        details += ` + ${d.criancas} criança(s)`;
-                                    }
-                                }
+                                // 🔥 REMOVIDO os detalhes do cabeçalho (evita duplicação)
 
                                 return (
                                     <div key={sessionId} className="p-4 hover:bg-gray-50">
-                                        {/* Cabeçalho da sessão (sem repetir detalhes) */}
+                                        {/* Cabeçalho da sessão (sem detalhes da consulta) */}
                                         <div className="flex items-center justify-between mb-2">
                                             <div className="flex items-center gap-3">
                                                 <span className="font-mono text-xs text-[#1e293b] bg-gray-100 px-2 py-1 rounded">{shortId}</span>
                                                 <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor}`}>{status}</span>
-                                                {details && <span className="text-xs text-gray-600 hidden sm:inline">{details}</span>}
                                             </div>
                                             <span className="text-xs text-gray-400">{lastTime}</span>
                                         </div>
