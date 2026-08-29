@@ -231,10 +231,11 @@ export const AdminPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* ========= JORNADAS DOS CLIENTES (ORDENAÇÃO POR STRING ISO) ========= */}
+      {/* ========= JORNADAS DOS CLIENTES (ORDENAÇÃO POR TIMESTAMP) ========= */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
       <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
         {(() => {
+          // Filtra eventos de teste e agrupa por sessão
           const sessions: Record<string, TrackingEvent[]> = {};
           trackingEvents.forEach(ev => {
             if (ev.event === 'teste_final' || ev.event === 'diagnostico' || ev.event === 'teste') return;
@@ -242,22 +243,18 @@ export const AdminPanel: React.FC = () => {
             sessions[ev.sessionId].push(ev);
           });
 
+          // Ordena eventos de cada sessão por timestamp (crescente)
           const sortedSessions = Object.entries(sessions)
             .map(([sessionId, events]) => {
-              // 🔥 ORDENAÇÃO POR STRING ISO (lexicográfica)
-              events.sort((a, b) => {
-                if (a.timestamp < b.timestamp) return -1;
-                if (a.timestamp > b.timestamp) return 1;
-                return 0;
-              });
+              // Ordenação segura por string ISO (localeCompare)
+              events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
               return { sessionId, events };
             })
             .sort((a, b) => {
+              // Ordena sessões pelo timestamp do último evento (decrescente)
               const aTime = a.events[a.events.length - 1]?.timestamp || '';
               const bTime = b.events[b.events.length - 1]?.timestamp || '';
-              if (bTime < aTime) return -1;
-              if (bTime > aTime) return 1;
-              return 0;
+              return bTime.localeCompare(aTime);
             });
 
           if (sortedSessions.length === 0) {
