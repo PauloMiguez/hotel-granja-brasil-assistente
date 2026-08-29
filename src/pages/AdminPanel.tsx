@@ -231,29 +231,29 @@ export const AdminPanel: React.FC = () => {
                 </div>
             </div>
 
-            {/* ========= JORNADAS DOS CLIENTES (ORDEM E SEM REPETIÇÃO) ========= */}
+            {/* ========= JORNADAS DOS CLIENTES ========= */}
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
                 {(() => {
-                    // Filtra eventos de teste e agrupa por sessionId
+                    // 🔥 ORDENA OS EVENTOS POR TIMESTAMP (crescente) ANTES DE AGRUPAR
+                    const sortedEvents = [...trackingEvents]
+                        .filter(ev => ev.event !== 'teste_final' && ev.event !== 'diagnostico' && ev.event !== 'teste')
+                        .sort((a, b) => {
+                            const ta = new Date(a.timestamp).getTime();
+                            const tb = new Date(b.timestamp).getTime();
+                            return ta - tb; // crescente
+                        });
+
+                    // Agrupa por sessionId mantendo a ordem
                     const sessions: Record<string, TrackingEvent[]> = {};
-                    trackingEvents.forEach(ev => {
-                        if (ev.event === 'teste_final' || ev.event === 'diagnostico' || ev.event === 'teste') return;
+                    sortedEvents.forEach(ev => {
                         if (!sessions[ev.sessionId]) sessions[ev.sessionId] = [];
                         sessions[ev.sessionId].push(ev);
                     });
 
                     // Ordena sessões pela data do último evento (mais recente primeiro)
                     const sortedSessions = Object.entries(sessions)
-                        .map(([sessionId, events]) => {
-                            // 🔥 ORDENAÇÃO CRONOLÓGICA POR TIMESTAMP (usando getTime)
-                            events.sort((a, b) => {
-                                const ta = new Date(a.timestamp).getTime();
-                                const tb = new Date(b.timestamp).getTime();
-                                return ta - tb; // do mais antigo para o mais novo
-                            });
-                            return { sessionId, events };
-                        })
+                        .map(([sessionId, events]) => ({ sessionId, events }))
                         .sort((a, b) => {
                             const aTime = new Date(a.events[a.events.length - 1]?.timestamp).getTime();
                             const bTime = new Date(b.events[b.events.length - 1]?.timestamp).getTime();
@@ -297,11 +297,10 @@ export const AdminPanel: React.FC = () => {
                                     statusColor = 'bg-red-100 text-red-700';
                                 }
 
-                                // Data da última ação
                                 const lastEvent = events[events.length - 1];
                                 const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
 
-                                // 🔥 Detalhes da consulta (apenas para exibição no cabeçalho, sem repetir)
+                                // 🔥 NÃO REPETIR DETALHES NO CABEÇALHO (serão exibidos no evento consulta_iniciada)
                                 const consulta = events.find(e => e.event === 'consulta_iniciada');
                                 let details = '';
                                 if (consulta?.data) {
@@ -314,7 +313,7 @@ export const AdminPanel: React.FC = () => {
 
                                 return (
                                     <div key={sessionId} className="p-4 hover:bg-gray-50">
-                                        {/* Cabeçalho da sessão (apenas uma vez) */}
+                                        {/* Cabeçalho da sessão (sem detalhes repetidos) */}
                                         <div className="flex items-center justify-between mb-2">
                                             <div className="flex items-center gap-3">
                                                 <span className="font-mono text-xs text-[#1e293b] bg-gray-100 px-2 py-1 rounded">{shortId}</span>
@@ -324,7 +323,7 @@ export const AdminPanel: React.FC = () => {
                                             <span className="text-xs text-gray-400">{lastTime}</span>
                                         </div>
 
-                                        {/* Lista de eventos EM ORDEM CRONOLÓGICA (já ordenada acima) */}
+                                        {/* Lista de eventos (já ordenados) */}
                                         <div className="ml-4 space-y-1">
                                             {events.map((ev, idx) => {
                                                 const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString('pt-BR') : '';
