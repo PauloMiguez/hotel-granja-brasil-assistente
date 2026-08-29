@@ -39,7 +39,6 @@ export const AdminPanel: React.FC = () => {
   const [error, setError] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // ========= BUSCAR CONVERSAS =========
   const fetchConversations = async () => {
     try {
       const res = await fetch(`${WORKER_URL}/conversas`);
@@ -55,41 +54,44 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
-  // ========= BUSCAR TRACKING =========
   const fetchTrackingStats = useCallback(async () => {
     try {
       const res = await fetch(`${WORKER_URL}/tracking-stats`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.events) {
+          // Filtra eventos com sessionId válido
+          const validEvents = data.events.filter((ev: any) => ev.sessionId && ev.sessionId.trim() !== '');
           const currentStr = JSON.stringify(trackingEvents);
-          const newStr = JSON.stringify(data.events);
+          const newStr = JSON.stringify(validEvents);
           if (currentStr !== newStr) {
             setTrackingStats(data.stats);
-            setTrackingEvents(data.events);
+            setTrackingEvents(validEvents);
           }
           return;
         }
       }
-      // Fallback para localStorage
+      // Fallback localStorage
       const localData = getLocalTrackingStats();
       if (localData) {
+        const validEvents = localData.events.filter((ev: any) => ev.sessionId && ev.sessionId.trim() !== '');
         const currentStr = JSON.stringify(trackingEvents);
-        const newStr = JSON.stringify(localData.events);
+        const newStr = JSON.stringify(validEvents);
         if (currentStr !== newStr) {
           setTrackingStats(localData.stats);
-          setTrackingEvents(localData.events);
+          setTrackingEvents(validEvents);
         }
       }
     } catch (e) {
       console.warn('Erro ao buscar tracking do servidor:', e);
       const localData = getLocalTrackingStats();
       if (localData) {
+        const validEvents = localData.events.filter((ev: any) => ev.sessionId && ev.sessionId.trim() !== '');
         const currentStr = JSON.stringify(trackingEvents);
-        const newStr = JSON.stringify(localData.events);
+        const newStr = JSON.stringify(validEvents);
         if (currentStr !== newStr) {
           setTrackingStats(localData.stats);
-          setTrackingEvents(localData.events);
+          setTrackingEvents(validEvents);
         }
       }
     }
@@ -134,11 +136,12 @@ export const AdminPanel: React.FC = () => {
           case 'abandono': stats.abandono++; break;
         }
       });
-      return { stats, events: history.slice(-30).reverse() };
+      // Filtra eventos com sessionId válido
+      const validEvents = history.filter((ev: any) => ev.sessionId && ev.sessionId.trim() !== '').slice(-30).reverse();
+      return { stats, events: validEvents };
     } catch { return null; }
   };
 
-  // Carrega dados apenas uma vez na montagem
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
@@ -148,14 +151,12 @@ export const AdminPanel: React.FC = () => {
     loadData();
   }, []);
 
-  // ========= ATUALIZAÇÃO MANUAL =========
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await Promise.all([fetchConversations(), fetchTrackingStats()]);
     setIsRefreshing(false);
   };
 
-  // ========= EXPORTAR CSV =========
   const exportCSV = () => {
     const headers = ['Sessão', 'Evento', 'Timestamp', 'Detalhes'];
     const rows = trackingEvents
@@ -183,7 +184,6 @@ export const AdminPanel: React.FC = () => {
     URL.revokeObjectURL(link.href);
   };
 
-  // ========= RENDER =========
   if (loading) return <div className="text-center p-8">Carregando...</div>;
   if (error) return <div className="text-red-600 p-8">{error}</div>;
 
@@ -196,20 +196,13 @@ export const AdminPanel: React.FC = () => {
       <header className="bg-[#1e293b] text-white p-4 rounded-lg mb-4 flex justify-between items-center flex-wrap gap-3">
         <h1 className="text-2xl font-bold">🏨 Painel Administrativo</h1>
         <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="bg-white/20 px-4 py-2 rounded hover:bg-white/30 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <button onClick={handleRefresh} disabled={isRefreshing} className="bg-white/20 px-4 py-2 rounded hover:bg-white/30 disabled:opacity-50">
             {isRefreshing ? '🔄 Atualizando...' : '🔄 Atualizar'}
           </button>
-          <button onClick={exportCSV} className="bg-white/20 px-4 py-2 rounded hover:bg-white/30">
-            📥 CSV
-          </button>
+          <button onClick={exportCSV} className="bg-white/20 px-4 py-2 rounded hover:bg-white/30">📥 CSV</button>
         </div>
       </header>
 
-      {/* Estatísticas do Chat */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Conversas" value={stats.total} />
         <StatCard label="Mensagens" value={stats.msgs.toLocaleString()} />
@@ -217,7 +210,6 @@ export const AdminPanel: React.FC = () => {
         <StatCard label="Média" value={stats.avg.toFixed(1)} suffix=" msg/conv" />
       </div>
 
-      {/* Funil de Conversão */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📈 Funil de Conversão</h2>
       <div className="bg-white rounded-lg shadow p-4 mb-6">
         <div className="flex justify-between items-center mb-2">
@@ -238,19 +230,17 @@ export const AdminPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* ========= JORNADAS DOS CLIENTES ========= */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
       <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
         {(() => {
-          // Agrupa eventos por sessionId
           const sessions: Record<string, TrackingEvent[]> = {};
           trackingEvents.forEach(ev => {
             if (ev.event === 'teste_final' || ev.event === 'diagnostico' || ev.event === 'teste') return;
+            if (!ev.sessionId || ev.sessionId.trim() === '') return;
             if (!sessions[ev.sessionId]) sessions[ev.sessionId] = [];
             sessions[ev.sessionId].push(ev);
           });
 
-          // Ordena sessões pela data do primeiro evento (mais recente primeiro)
           const sortedSessions = Object.entries(sessions)
             .map(([sessionId, events]) => {
               events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -280,7 +270,6 @@ export const AdminPanel: React.FC = () => {
                 </thead>
                 <tbody>
                   {sortedSessions.slice(0, 30).map(({ sessionId, events }) => {
-                    // Determina o status da jornada
                     const hasConsulta = events.some(e => e.event === 'consulta_iniciada');
                     const hasSucesso = events.some(e => e.event === 'consulta_sucesso');
                     const hasCarrinho = events.some(e => e.event === 'carrinho_adicionado');
@@ -290,7 +279,6 @@ export const AdminPanel: React.FC = () => {
 
                     let status = '🔄 Em andamento';
                     let statusColor = 'bg-blue-100 text-blue-700';
-                    
                     if (hasWhatsApp) {
                       status = '✅ Convertido';
                       statusColor = 'bg-green-100 text-green-700';
@@ -308,7 +296,6 @@ export const AdminPanel: React.FC = () => {
                       statusColor = 'bg-red-100 text-red-700';
                     }
 
-                    // Resumo da jornada (ícones)
                     const steps = [
                       hasConsulta ? '🔍' : '',
                       hasSucesso ? '✅' : '',
@@ -318,7 +305,6 @@ export const AdminPanel: React.FC = () => {
                       hasAbandono ? '🚫' : '',
                     ].filter(Boolean).join(' → ');
 
-                    // Detalhes (check-in, adultos, etc)
                     const firstEvent = events.find(e => e.event === 'consulta_iniciada');
                     let details = '';
                     if (firstEvent?.data) {
@@ -329,19 +315,14 @@ export const AdminPanel: React.FC = () => {
 
                     const lastEvent = events[events.length - 1];
                     const time = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
-
-                    const shortId = sessionId.length > 30 
-                      ? sessionId.substring(0, 15) + '...' 
-                      : sessionId;
+                    const shortId = sessionId.length > 30 ? sessionId.substring(0, 15) + '...' : sessionId;
 
                     return (
                       <tr key={sessionId} className="border-b border-gray-100 hover:bg-gray-50">
                         <td className="p-3 font-mono text-xs text-[#1e293b]">{shortId}</td>
                         <td className="p-3 text-sm">{steps}</td>
                         <td className="p-3">
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor}`}>
-                            {status}
-                          </span>
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor}`}>{status}</span>
                         </td>
                         <td className="p-3 text-gray-600 text-xs">{details}</td>
                         <td className="p-3 text-gray-400 text-xs">{time}</td>
@@ -351,16 +332,13 @@ export const AdminPanel: React.FC = () => {
                 </tbody>
               </table>
               {sortedSessions.length > 30 && (
-                <div className="text-center text-xs text-gray-400 py-2">
-                  Mostrando 30 de {sortedSessions.length} sessões
-                </div>
+                <div className="text-center text-xs text-gray-400 py-2">Mostrando 30 de {sortedSessions.length} sessões</div>
               )}
             </div>
           );
         })()}
       </div>
 
-      {/* Conversas */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
@@ -391,7 +369,6 @@ export const AdminPanel: React.FC = () => {
   );
 };
 
-// ========= COMPONENTES AUXILIARES =========
 const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({ label, value, suffix = '' }) => (
   <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#1e293b]">
     <div className="text-2xl font-bold text-[#1e293b]">{value}{suffix}</div>
