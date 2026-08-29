@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react';
 import { AppState, AppAction } from '../types';
-import { loadCartFromLocalStorage, saveCartToLocalStorage, clearCartFromLocalStorage } from '../utils/localStorage';
+import { loadCartFromLocalStorage, saveCartToLocalStorage } from '../utils/localStorage';
 
 const initialState: AppState = {
   messages: [],
@@ -13,34 +13,26 @@ const initialState: AppState = {
   conversationId: null,
 };
 
-// Carrega o carrinho do localStorage se disponível
 function getInitialState(): AppState {
   const savedCart = loadCartFromLocalStorage();
   if (savedCart && savedCart.length > 0) {
-    return {
-      ...initialState,
-      cart: savedCart,
-    };
+    return { ...initialState, cart: savedCart };
   }
   return initialState;
 }
 
 function appReducer(state: AppState, action: AppAction): AppState {
-  let newState: AppState;
   switch (action.type) {
     case 'ADD_MESSAGE':
       return { ...state, messages: [...state.messages, action.payload] };
     case 'SET_MESSAGES':
       return { ...state, messages: action.payload };
     case 'ADD_TO_CART':
-      newState = { ...state, cart: [...state.cart, action.payload] };
-      return newState;
+      return { ...state, cart: [...state.cart, action.payload] };
     case 'REMOVE_FROM_CART':
-      newState = { ...state, cart: state.cart.filter((_, i) => i !== action.payload) };
-      return newState;
+      return { ...state, cart: state.cart.filter((_, i) => i !== action.payload) };
     case 'CLEAR_CART':
-      newState = { ...state, cart: [] };
-      return newState;
+      return { ...state, cart: [] };
     case 'SET_AVAILABILITY':
       return { ...state, availability: action.payload };
     case 'SET_LOADING':
@@ -63,7 +55,6 @@ const AppContext = createContext<{ state: AppState; dispatch: React.Dispatch<App
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(appReducer, getInitialState());
 
-  // Salva o carrinho no localStorage sempre que ele mudar
   useEffect(() => {
     saveCartToLocalStorage(state.cart);
   }, [state.cart]);

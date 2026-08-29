@@ -1,4 +1,3 @@
-// src/pages/AdminPanel.tsx
 import React, { useState, useEffect } from 'react';
 
 const WORKER_URL = 'https://intrega-ia.paulo-migueoli.workers.dev';
@@ -28,7 +27,6 @@ interface TrackingEvent {
 }
 
 export const AdminPanel: React.FC = () => {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [filtered, setFiltered] = useState<Conversation[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
@@ -43,7 +41,6 @@ export const AdminPanel: React.FC = () => {
   useEffect(() => {
     fetchConversations();
     fetchTrackingStats();
-    // Atualiza a cada 10 segundos
     const interval = setInterval(() => {
       fetchConversations();
       fetchTrackingStats();
@@ -57,7 +54,6 @@ export const AdminPanel: React.FC = () => {
       const data = await res.json();
       if (data.success) {
         const convs = parseConversations(data.data || []);
-        setConversations(convs);
         setFiltered(convs);
         updateStats(convs);
       }
@@ -77,7 +73,6 @@ export const AdminPanel: React.FC = () => {
         setTrackingStats(data.stats);
         setTrackingEvents(data.events || []);
       } else {
-        // Fallback para localStorage
         const localData = getLocalTrackingStats();
         if (localData) {
           setTrackingStats(localData.stats);
@@ -134,13 +129,11 @@ export const AdminPanel: React.FC = () => {
     } catch { return null; }
   };
 
-  // Renderização
   if (loading) return <div className="text-center p-8">Carregando...</div>;
   if (error) return <div className="text-red-600 p-8">{error}</div>;
 
   return (
     <div className="container mx-auto px-4 py-6 max-w-7xl">
-      {/* Header */}
       <header className="bg-[#075e54] text-white p-4 rounded-lg mb-4 flex justify-between items-center flex-wrap">
         <h1 className="text-2xl font-bold">🏨 Painel Administrativo</h1>
         <div className="flex gap-2">
@@ -149,7 +142,6 @@ export const AdminPanel: React.FC = () => {
         </div>
       </header>
 
-      {/* Estatísticas do Chat */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Conversas" value={stats.total} />
         <StatCard label="Mensagens" value={stats.msgs} />
@@ -157,7 +149,6 @@ export const AdminPanel: React.FC = () => {
         <StatCard label="Média" value={stats.avg.toFixed(1)} suffix=" msg/conv" />
       </div>
 
-      {/* Funil de Conversão */}
       <h2 className="text-xl font-semibold text-[#075e54] border-b pb-2 mb-4">📈 Funil de Conversão</h2>
       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-3 mb-6">
         <TrackingCard label="Consultas" value={trackingStats.consultas} />
@@ -169,7 +160,6 @@ export const AdminPanel: React.FC = () => {
         <TrackingCard label="Abandonos" value={trackingStats.abandono} color="red" />
       </div>
 
-      {/* Eventos recentes */}
       <h2 className="text-xl font-semibold text-[#075e54] border-b pb-2 mb-4">🕒 Últimos Eventos</h2>
       <div className="bg-white rounded-lg shadow p-3 max-h-64 overflow-y-auto mb-6">
         {trackingEvents.length === 0 ? (
@@ -199,7 +189,6 @@ export const AdminPanel: React.FC = () => {
         )}
       </div>
 
-      {/* Lista de conversas (simplificada) */}
       <h2 className="text-xl font-semibold text-[#075e54] border-b pb-2 mb-4">📋 Conversas</h2>
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
@@ -219,7 +208,6 @@ export const AdminPanel: React.FC = () => {
           </div>
         ))}
       </div>
-      {/* Paginação simples */}
       {filtered.length > pageSize && (
         <div className="flex justify-center gap-2 mt-4">
           <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} disabled={currentPage===1} className="px-3 py-1 border rounded disabled:opacity-50">◀</button>
@@ -231,7 +219,6 @@ export const AdminPanel: React.FC = () => {
   );
 };
 
-// Componentes auxiliares
 const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({ label, value, suffix = '' }) => (
   <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#075e54]">
     <div className="text-2xl font-bold text-[#075e54]">{value}{suffix}</div>
