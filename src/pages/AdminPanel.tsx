@@ -230,7 +230,7 @@ export const AdminPanel: React.FC = () => {
                 </div>
             </div>
 
-            {/* ========= JORNADAS DOS CLIENTES (COM DETALHES) ========= */}
+            {/* ========= JORNADAS DOS CLIENTES (COM DETALHES E ORDEM CRONOLÓGICA) ========= */}
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
                 {(() => {
@@ -245,13 +245,18 @@ export const AdminPanel: React.FC = () => {
                     // Ordena sessões pela data do último evento (mais recente primeiro)
                     const sortedSessions = Object.entries(sessions)
                         .map(([sessionId, events]) => {
-                            events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                            // 🔥 CORREÇÃO: ordena eventos do mais antigo para o mais recente
+                            events.sort((a, b) => {
+                                const timeA = new Date(a.timestamp).getTime();
+                                const timeB = new Date(b.timestamp).getTime();
+                                return timeA - timeB; // antigo → novo
+                            });
                             return { sessionId, events };
                         })
                         .sort((a, b) => {
                             const aTime = a.events[a.events.length - 1]?.timestamp || '';
                             const bTime = b.events[b.events.length - 1]?.timestamp || '';
-                            return new Date(bTime).getTime() - new Date(aTime).getTime();
+                            return new Date(bTime).getTime() - new Date(aTime).getTime(); // mais recente primeiro
                         });
 
                     if (sortedSessions.length === 0) {
@@ -315,7 +320,7 @@ export const AdminPanel: React.FC = () => {
                                             <span className="text-xs text-gray-400">{lastTime}</span>
                                         </div>
 
-                                        {/* Lista de eventos da sessão */}
+                                        {/* Lista de eventos da sessão em ordem cronológica (antigo → novo) */}
                                         <div className="ml-4 space-y-1">
                                             {events.map((ev, idx) => {
                                                 const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString('pt-BR') : '';
