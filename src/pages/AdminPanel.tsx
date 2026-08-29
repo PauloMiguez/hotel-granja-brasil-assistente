@@ -231,11 +231,11 @@ export const AdminPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* ========= JORNADAS DOS CLIENTES (ORDENAÇÃO POR TIMESTAMP) ========= */}
+      {/* ========= JORNADAS DOS CLIENTES (ORDENAÇÃO CORRIGIDA) ========= */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
       <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
         {(() => {
-          // Filtra eventos de teste e agrupa por sessão
+          // Filtra eventos de teste e agrupa por sessionId
           const sessions: Record<string, TrackingEvent[]> = {};
           trackingEvents.forEach(ev => {
             if (ev.event === 'teste_final' || ev.event === 'diagnostico' || ev.event === 'teste') return;
@@ -246,15 +246,18 @@ export const AdminPanel: React.FC = () => {
           // Ordena eventos de cada sessão por timestamp (crescente)
           const sortedSessions = Object.entries(sessions)
             .map(([sessionId, events]) => {
-              // Ordenação segura por string ISO (localeCompare)
-              events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+              // 🔥 CORREÇÃO: ordenação por getTime()
+              events.sort((a, b) => {
+                const timeA = new Date(a.timestamp).getTime();
+                const timeB = new Date(b.timestamp).getTime();
+                return timeA - timeB;
+              });
               return { sessionId, events };
             })
             .sort((a, b) => {
-              // Ordena sessões pelo timestamp do último evento (decrescente)
-              const aTime = a.events[a.events.length - 1]?.timestamp || '';
-              const bTime = b.events[b.events.length - 1]?.timestamp || '';
-              return bTime.localeCompare(aTime);
+              const aTime = new Date(a.events[a.events.length - 1]?.timestamp).getTime();
+              const bTime = new Date(b.events[b.events.length - 1]?.timestamp).getTime();
+              return bTime - aTime; // mais recente primeiro
             });
 
           if (sortedSessions.length === 0) {
