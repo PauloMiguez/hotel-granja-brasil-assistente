@@ -39,7 +39,7 @@ export const AdminPanel: React.FC = () => {
     const [error, setError] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
 
-    // 🔥 ESTADO DO FILTRO DE DATA DA JORNADA (Padrão: Hoje no formato YYYY-MM-DD)
+    // Filtro de data da jornada (Padrão: Hoje YYYY-MM-DD)
     const [selectedDate, setSelectedDate] = useState<string>(() => {
         const today = new Date();
         const year = today.getFullYear();
@@ -243,8 +243,7 @@ export const AdminPanel: React.FC = () => {
             {/* ========= JORNADAS DOS CLIENTES ========= */}
             <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-2 mb-4 gap-2">
                 <h2 className="text-xl font-semibold text-[#1e293b]">🧑‍💻 Jornadas dos Clientes</h2>
-
-                {/* 🔍 FILTRO DE DATA */}
+                
                 <div className="flex items-center gap-2">
                     <label className="text-xs text-slate-500 font-medium">Filtrar por data:</label>
                     <input
@@ -275,57 +274,41 @@ export const AdminPanel: React.FC = () => {
                         { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
                     ];
 
-                    // 1. Limpa eventos ignorados
                     const validEvents = trackingEvents.filter(
                         ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
                     );
 
-                    // 2. Agrupa TODOS os eventos por sessionId primeiro
                     const sessionsMap: Record<string, typeof trackingEvents> = {};
                     validEvents.forEach(ev => {
                         if (!sessionsMap[ev.sessionId]) sessionsMap[ev.sessionId] = [];
                         sessionsMap[ev.sessionId].push(ev);
                     });
 
-                    // 3. Ordena os eventos dentro de cada sessão por timestamp (crescente)
                     Object.keys(sessionsMap).forEach(sId => {
                         sessionsMap[sId].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
                     });
 
-                    // 4. Converte em array de sessões
-                    let allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => ({
+                    const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => ({
                         sessionId,
                         events,
-                        // Pega a data de início da sessão (primeiro evento)
-                        startTime: events[0]?.timestamp ? new Date(events[0].timestamp) : new Date(0),
-                        // Pega a data da última atividade (último evento)
                         lastTime: events[events.length - 1]?.timestamp ? new Date(events[events.length - 1].timestamp) : new Date(0)
                     }));
 
-                    // Função utilitária para extrair YYYY-MM-DD considerando TANTO local quanto ISO/UTC
                     const matchesDate = (dateObj: Date, targetDateStr: string) => {
                         if (isNaN(dateObj.getTime())) return false;
-
-                        // Formato local YYYY-MM-DD
                         const y = dateObj.getFullYear();
                         const m = String(dateObj.getMonth() + 1).padStart(2, '0');
                         const d = String(dateObj.getDate()).padStart(2, '0');
                         const localStr = `${y}-${m}-${d}`;
-
-                        // Formato ISO/UTC YYYY-MM-DD
                         const isoStr = dateObj.toISOString().slice(0, 10);
-
                         return localStr === targetDateStr || isoStr === targetDateStr;
                     };
 
-                    // 5. Filtra as SESSÕES por data (se houver data selecionada)
                     const filteredSessions = allSessions.filter(session => {
                         if (!selectedDate) return true;
-                        // Valida se QUALQUER evento da sessão ocorreu no dia selecionado ou se a sessão iniciou/terminou nesse dia
                         return session.events.some(ev => matchesDate(new Date(ev.timestamp), selectedDate));
                     });
 
-                    // 6. Ordena as sessões (mais recentes primeiro)
                     const sortedSessions = filteredSessions.sort((a, b) => b.lastTime.getTime() - a.lastTime.getTime());
 
                     if (sortedSessions.length === 0) {
@@ -343,7 +326,6 @@ export const AdminPanel: React.FC = () => {
 
                     return (
                         <>
-                            {/* Barra informativa do filtro */}
                             <div className="bg-slate-50 px-5 py-2.5 border-b border-slate-200 text-xs text-slate-600 flex flex-wrap gap-4 items-center justify-between">
                                 <div>
                                     Exibindo <strong>{totalSessions}</strong> sessão(ões) {selectedDate ? `para o dia ${selectedDate.split('-').reverse().join('/')}` : 'no total'}.
@@ -389,7 +371,6 @@ export const AdminPanel: React.FC = () => {
 
                                     return (
                                         <div key={sessionId} className="p-5 hover:bg-slate-50/50 transition-colors">
-                                            {/* Header da Sessão */}
                                             <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                                                 <div className="flex items-center gap-2">
                                                     <span className="font-mono text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
@@ -407,7 +388,6 @@ export const AdminPanel: React.FC = () => {
                                                 <span className="text-xs font-medium text-slate-400">{lastTimeStr}</span>
                                             </div>
 
-                                            {/* Stepper Horizontal */}
                                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
                                                 <div className="flex items-center justify-between relative">
                                                     {JOURNEY_STEPS.map((step, idx) => {
@@ -418,10 +398,11 @@ export const AdminPanel: React.FC = () => {
                                                             <React.Fragment key={step.key}>
                                                                 <div className="flex flex-col items-center z-10">
                                                                     <div
-                                                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted
+                                                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
+                                                                            isCompleted
                                                                                 ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
                                                                                 : 'bg-slate-200 text-slate-400'
-                                                                            }`}
+                                                                        }`}
                                                                     >
                                                                         {step.icon}
                                                                     </div>
@@ -433,8 +414,9 @@ export const AdminPanel: React.FC = () => {
                                                                 {idx < JOURNEY_STEPS.length - 1 && (
                                                                     <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
                                                                         <div
-                                                                            className={`h-full transition-all ${events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
-                                                                                }`}
+                                                                            className={`h-full transition-all ${
+                                                                                events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
+                                                                            }`}
                                                                         />
                                                                     </div>
                                                                 )}
@@ -444,7 +426,6 @@ export const AdminPanel: React.FC = () => {
                                                 </div>
                                             </div>
 
-                                            {/* Detalhes Técnicos / Timeline Vertical */}
                                             <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2">
                                                 {events.map((ev, idx) => {
                                                     const eventTime = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
@@ -495,51 +476,52 @@ export const AdminPanel: React.FC = () => {
                         </>
                     );
                 })()}
-
-                {/* Conversas */}
-                <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
-                <div className="bg-white rounded-lg shadow overflow-hidden">
-                    <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
-                        <span>ID</span>
-                        <span>Mensagens</span>
-                        <span>Última Atualização</span>
-                        <span>Origem</span>
-                        <span>Ações</span>
-                    </div>
-                    {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => (
-                        <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
-                            <span className="font-mono text-xs text-[#1e293b] truncate">{conv.id.substring(0, 20)}...</span>
-                            <span>{conv.total_messages}</span>
-                            <span className="text-gray-600 text-xs">{new Date(conv.last_updated).toLocaleString('pt-BR')}</span>
-                            <span>{conv.source}</span>
-                            <button className="bg-[#1e293b] text-white px-2 py-1 rounded text-xs hover:bg-[#2d3a4f]">Ver</button>
-                        </div>
-                    ))}
-                </div>
-                {filtered.length > pageSize && (
-                    <div className="flex justify-center gap-2 mt-4">
-                        <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 border rounded disabled:opacity-50">◀</button>
-                        <span className="px-3 py-1">{currentPage} de {Math.ceil(filtered.length / pageSize)}</span>
-                        <button onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))} disabled={currentPage === Math.ceil(filtered.length / pageSize)} className="px-3 py-1 border rounded disabled:opacity-50">▶</button>
-                    </div>
-                )}
             </div>
-            );
+
+            {/* Conversas */}
+            <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
+            <div className="bg-white rounded-lg shadow overflow-hidden">
+                <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
+                    <span>ID</span>
+                    <span>Mensagens</span>
+                    <span>Última Atualização</span>
+                    <span>Origem</span>
+                    <span>Ações</span>
+                </div>
+                {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => (
+                    <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
+                        <span className="font-mono text-xs text-[#1e293b] truncate">{conv.id.substring(0, 20)}...</span>
+                        <span>{conv.total_messages}</span>
+                        <span className="text-gray-600 text-xs">{new Date(conv.last_updated).toLocaleString('pt-BR')}</span>
+                        <span>{conv.source}</span>
+                        <button className="bg-[#1e293b] text-white px-2 py-1 rounded text-xs hover:bg-[#2d3a4f]">Ver</button>
+                    </div>
+                ))}
+            </div>
+            {filtered.length > pageSize && (
+                <div className="flex justify-center gap-2 mt-4">
+                    <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 border rounded disabled:opacity-50">◀</button>
+                    <span className="px-3 py-1">{currentPage} de {Math.ceil(filtered.length / pageSize)}</span>
+                    <button onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))} disabled={currentPage === Math.ceil(filtered.length / pageSize)} className="px-3 py-1 border rounded disabled:opacity-50">▶</button>
+                </div>
+            )}
+        </div>
+    );
 };
 
-            const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({label, value, suffix = ''}) => (
-            <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#1e293b]">
-                <div className="text-2xl font-bold text-[#1e293b]">{value}{suffix}</div>
-                <div className="text-sm text-gray-600">{label}</div>
-            </div>
-            );
+const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({ label, value, suffix = '' }) => (
+    <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#1e293b]">
+        <div className="text-2xl font-bold text-[#1e293b]">{value}{suffix}</div>
+        <div className="text-sm text-gray-600">{label}</div>
+    </div>
+);
 
-            const TrackingCard: React.FC<{ label: string; value: number; color?: string }> = ({label, value, color}) => {
+const TrackingCard: React.FC<{ label: string; value: number; color?: string }> = ({ label, value, color }) => {
     const borderColor = color === 'gold' ? 'border-t-yellow-500' : color === 'red' ? 'border-t-red-500' : 'border-t-[#1e293b]';
-            return (
-            <div className={`bg-white p-3 rounded-lg shadow text-center border-t-4 ${borderColor}`}>
-                <div className="text-2xl font-bold text-[#1e293b]">{value}</div>
-                <div className="text-xs text-gray-600">{label}</div>
-            </div>
-            );
+    return (
+        <div className={`bg-white p-3 rounded-lg shadow text-center border-t-4 ${borderColor}`}>
+            <div className="text-2xl font-bold text-[#1e293b]">{value}</div>
+            <div className="text-xs text-gray-600">{label}</div>
+        </div>
+    );
 };
