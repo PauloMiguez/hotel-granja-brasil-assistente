@@ -39,6 +39,15 @@ export const AdminPanel: React.FC = () => {
     const [error, setError] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
 
+    // 🔥 ESTADO DO FILTRO DE DATA DA JORNADA (Padrão: Hoje no formato YYYY-MM-DD)
+    const [selectedDate, setSelectedDate] = useState<string>(() => {
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const day = String(today.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    });
+
     // ========= BUSCAR CONVERSAS =========
     const fetchConversations = async () => {
         try {
@@ -232,10 +241,32 @@ export const AdminPanel: React.FC = () => {
             </div>
 
             {/* ========= JORNADAS DOS CLIENTES ========= */}
-            <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
+            <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-2 mb-4 gap-2">
+                <h2 className="text-xl font-semibold text-[#1e293b]">🧑‍💻 Jornadas dos Clientes</h2>
+                
+                {/* 🔍 FILTRO DE DATA */}
+                <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-500 font-medium">Filtrar por data:</label>
+                    <input
+                        type="date"
+                        value={selectedDate}
+                        onChange={(e) => setSelectedDate(e.target.value)}
+                        className="text-xs bg-white border border-slate-300 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-slate-700 shadow-sm"
+                    />
+                    {selectedDate && (
+                        <button
+                            onClick={() => setSelectedDate('')}
+                            className="text-xs text-slate-400 hover:text-slate-600 bg-slate-100 px-2 py-1.5 rounded-md transition-colors"
+                            title="Limpar filtro e ver todas as datas"
+                        >
+                            Ver Todas
+                        </button>
+                    )}
+                </div>
+            </div>
+
             <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
                 {(() => {
-                    // 1. Definição da ordem ideal dos passos da jornada
                     const JOURNEY_STEPS = [
                         { key: 'consulta_iniciada', label: 'Consulta', icon: '🔍' },
                         { key: 'consulta_sucesso', label: 'Sucesso', icon: '✅' },
@@ -244,19 +275,34 @@ export const AdminPanel: React.FC = () => {
                         { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
                     ];
 
-                    // Ordena os eventos por timestamp (crescente)
-                    const sortedEvents = [...trackingEvents]
+                    // 1. Filtra eventos válidos e por data (se houver uma data selecionada)
+                    const filteredEventsByDate = trackingEvents
                         .filter(ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event))
-                        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                        .filter(ev => {
+                            if (!selectedDate) return true;
+                            if (!ev.timestamp) return false;
+                            
+                            // Formata o timestamp do evento para YYYY-MM-DD considerando a timezone local
+                            const eventDate = new Date(ev.timestamp);
+                            const year = eventDate.getFullYear();
+                            const month = String(eventDate.getMonth() + 1).padStart(2, '0');
+                            const day = String(eventDate.getDate()).padStart(2, '0');
+                            const eventFormattedDate = `${year}-${month}-${day}`;
 
-                    // Agrupa por sessionId
+                            return eventFormattedDate === selectedDate;
+                        });
+
+                    // 2. Ordena os eventos filtrados por timestamp (crescente)
+                    const sortedEvents = [...filteredEventsByDate].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+                    // 3. Agrupa por sessionId
                     const sessions: Record<string, typeof trackingEvents> = {};
                     sortedEvents.forEach(ev => {
                         if (!sessions[ev.sessionId]) sessions[ev.sessionId] = [];
                         sessions[ev.sessionId].push(ev);
                     });
 
-                    // Ordena sessões (mais recentes primeiro)
+                    // 4. Ordena sessões (mais recentes primeiro)
                     const sortedSessions = Object.entries(sessions)
                         .map(([sessionId, events]) => ({ sessionId, events }))
                         .sort((a, b) => {
@@ -266,153 +312,178 @@ export const AdminPanel: React.FC = () => {
                         });
 
                     if (sortedSessions.length === 0) {
-                        return <div className="text-gray-500 text-center py-8">Nenhuma jornada registrada.</div>;
+                        return (
+                            <div className="text-gray-500 text-center py-12">
+                                <div className="text-3xl mb-2">📅</div>
+                                Nenhuma jornada registrada para {selectedDate ? new Date(selectedDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'o período'}.
+                            </div>
+                        );
                     }
 
+                    // Métricas rápidas do dia filtrado
+                    const totalSessions = sortedSessions.length;
+                    const convertedSessions = sortedSessions.filter(s => s.events.some(e => e.event === 'whatsapp_enviado')).length;
+                    const abandonedSessions = sortedSessions.filter(s => s.events.some(e => e.event === 'abandono' || e.event === 'consulta_vazia')).length;
+
                     return (
-                        <div className="divide-y divide-gray-100">
-                            {sortedSessions.slice(0, 20).map(({ sessionId, events }) => {
-                                const shortId = sessionId.length > 20 ? `${sessionId.substring(0, 10)}...` : sessionId;
+                        <>
+                            {/* Barra informativa do filtro */}
+                            <div className="bg-slate-50 px-5 py-2.5 border-b border-slate-200 text-xs text-slate-600 flex flex-wrap gap-4 items-center justify-between">
+                                <div>
+                                    Exibindo <strong>{totalSessions}</strong> sessão(ões) {selectedDate ? `para o dia ${new Date(selectedDate + 'T00:00:00').toLocaleDateString('pt-BR')}` : 'no total'}.
+                                </div>
+                                <div className="flex gap-3">
+                                    <span className="text-emerald-700 font-medium">✅ {convertedSessions} Convertidas</span>
+                                    <span className="text-rose-700 font-medium">🚫 {abandonedSessions} Abandonadas</span>
+                                    <span className="text-blue-700 font-medium">🔄 {totalSessions - convertedSessions - abandonedSessions} Em andamento</span>
+                                </div>
+                            </div>
 
-                                // Mapeamento de status e cores
-                                const hasWhatsApp = events.some(e => e.event === 'whatsapp_enviado');
-                                const hasAbandono = events.some(e => e.event === 'abandono' || e.event === 'consulta_vazia');
-                                const hasCarrinho = events.some(e => e.event === 'carrinho_adicionado');
-                                const hasSucesso = events.some(e => e.event === 'consulta_sucesso');
+                            <div className="divide-y divide-gray-100">
+                                {sortedSessions.map(({ sessionId, events }) => {
+                                    const shortId = sessionId.length > 20 ? `${sessionId.substring(0, 10)}...` : sessionId;
 
-                                let status = '🔄 Em andamento';
-                                let statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
+                                    const hasWhatsApp = events.some(e => e.event === 'whatsapp_enviado');
+                                    const hasAbandono = events.some(e => e.event === 'abandono' || e.event === 'consulta_vazia');
+                                    const hasCarrinho = events.some(e => e.event === 'carrinho_adicionado');
+                                    const hasSucesso = events.some(e => e.event === 'consulta_sucesso');
 
-                                if (hasWhatsApp) {
-                                    status = '✅ Convertido';
-                                    statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                                } else if (hasAbandono) {
-                                    status = '🚫 Abandonou';
-                                    statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
-                                } else if (hasCarrinho) {
-                                    status = '🛒 No carrinho';
-                                    statusColor = 'bg-purple-50 text-purple-700 border-purple-200';
-                                } else if (hasSucesso) {
-                                    status = '👀 Viu quartos';
-                                    statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
-                                }
+                                    let status = '🔄 Em andamento';
+                                    let statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
 
-                                const lastEvent = events[events.length - 1];
-                                const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
+                                    if (hasWhatsApp) {
+                                        status = '✅ Convertido';
+                                        statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                    } else if (hasAbandono) {
+                                        status = '🚫 Abandonou';
+                                        statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
+                                    } else if (hasCarrinho) {
+                                        status = '🛒 No carrinho';
+                                        statusColor = 'bg-purple-50 text-purple-700 border-purple-200';
+                                    } else if (hasSucesso) {
+                                        status = '👀 Viu quartos';
+                                        statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                                    }
 
-                                // Dados da consulta inicial para badge no topo
-                                const consulta = events.find(e => e.event === 'consulta_iniciada');
-                                const d = consulta?.data;
+                                    const lastEvent = events[events.length - 1];
+                                    const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
 
-                                return (
-                                    <div key={sessionId} className="p-5 hover:bg-slate-50/50 transition-colors">
-                                        {/* Header da Sessão */}
-                                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                                            <div className="flex items-center gap-2">
-                                                <span className="font-mono text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-                                                    {shortId}
-                                                </span>
-                                                <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusColor}`}>
-                                                    {status}
-                                                </span>
-                                                {d && (
-                                                    <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-100">
-                                                        📅 {d.checkin || '-'} até {d.checkout || '-'} • 👥 {d.adultos || 0}a{d.criancas ? ` + ${d.criancas}c` : ''}
+                                    const consulta = events.find(e => e.event === 'consulta_iniciada');
+                                    const d = consulta?.data;
+
+                                    return (
+                                        <div key={sessionId} className="p-5 hover:bg-slate-50/50 transition-colors">
+                                            {/* Header da Sessão */}
+                                            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-mono text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
+                                                        {shortId}
                                                     </span>
-                                                )}
+                                                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusColor}`}>
+                                                        {status}
+                                                    </span>
+                                                    {d && (
+                                                        <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                                                            📅 {d.checkin || '-'} até {d.checkout || '-'} • 👥 {d.adultos || 0}a{d.criancas ? ` + ${d.criancas}c` : ''}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <span className="text-xs font-medium text-slate-400">{lastTime}</span>
                                             </div>
-                                            <span className="text-xs font-medium text-slate-400">{lastTime}</span>
-                                        </div>
 
-                                        {/* Visualização Visual da Jornada (Stepper Horizontal) */}
-                                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
-                                            <div className="flex items-center justify-between relative">
-                                                {JOURNEY_STEPS.map((step, idx) => {
-                                                    const stepEvent = events.find(e => e.event === step.key);
-                                                    const isCompleted = !!stepEvent;
+                                            {/* Stepper Horizontal */}
+                                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
+                                                <div className="flex items-center justify-between relative">
+                                                    {JOURNEY_STEPS.map((step, idx) => {
+                                                        const stepEvent = events.find(e => e.event === step.key);
+                                                        const isCompleted = !!stepEvent;
+
+                                                        return (
+                                                            <React.Fragment key={step.key}>
+                                                                <div className="flex flex-col items-center z-10">
+                                                                    <div
+                                                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
+                                                                            isCompleted
+                                                                                ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
+                                                                                : 'bg-slate-200 text-slate-400'
+                                                                        }`}
+                                                                    >
+                                                                        {step.icon}
+                                                                    </div>
+                                                                    <span className={`text-[11px] mt-1 font-medium ${isCompleted ? 'text-slate-800' : 'text-slate-400'}`}>
+                                                                        {step.label}
+                                                                    </span>
+                                                                </div>
+
+                                                                {/* Linha Conectora entre os passos */}
+                                                                {idx < JOURNEY_STEPS.length - 1 && (
+                                                                    <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
+                                                                        <div
+                                                                            className={`h-full transition-all ${
+                                                                                events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
+                                                                            }`}
+                                                                        />
+                                                                    </div>
+                                                                )}
+                                                            </React.Fragment>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+
+                                            {/* Detalhes Técnicos / Timeline Vertical */}
+                                            <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2">
+                                                {events.map((ev, idx) => {
+                                                    const eventTime = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+
+                                                    let detail = '';
+                                                    switch (ev.event) {
+                                                        case 'consulta_iniciada':
+                                                            detail = `Busca realizada para ${ev.data?.adultos || 0} adulto(s)`;
+                                                            break;
+                                                        case 'consulta_sucesso':
+                                                            detail = `${ev.data?.quartos || 0} quarto(s) disponível(is)`;
+                                                            break;
+                                                        case 'consulta_vazia':
+                                                            detail = 'Nenhum quarto disponível para este período';
+                                                            break;
+                                                        case 'carrinho_adicionado':
+                                                            detail = `${ev.data?.quantidade || 0} item(ns) adicionado(s)`;
+                                                            break;
+                                                        case 'orcamento_visualizado':
+                                                            detail = `Valor do orçamento: R$ ${ev.data?.total || 0}`;
+                                                            break;
+                                                        case 'whatsapp_enviado':
+                                                            detail = `Contato via WhatsApp por ${ev.data?.cliente || 'Cliente'} (R$ ${ev.data?.total || 0})`;
+                                                            break;
+                                                        case 'abandono':
+                                                            detail = `Abandonou a página na etapa: ${ev.data?.stage || 'desconhecida'}`;
+                                                            break;
+                                                        default:
+                                                            detail = JSON.stringify(ev.data || {});
+                                                    }
 
                                                     return (
-                                                        <React.Fragment key={step.key}>
-                                                            <div className="flex flex-col items-center z-10">
-                                                                <div
-                                                                    className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted
-                                                                            ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
-                                                                            : 'bg-slate-200 text-slate-400'
-                                                                        }`}
-                                                                >
-                                                                    {step.icon}
-                                                                </div>
-                                                                <span className={`text-[11px] mt-1 font-medium ${isCompleted ? 'text-slate-800' : 'text-slate-400'}`}>
-                                                                    {step.label}
-                                                                </span>
+                                                        <div key={idx} className="flex items-center justify-between text-xs text-slate-600 hover:text-slate-900">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                                                                <span className="font-semibold capitalize text-slate-700">{ev.event.replace('_', ' ')}:</span>
+                                                                <span className="text-slate-500">{detail}</span>
                                                             </div>
-
-                                                            {/* Linha Conectora entre os passos */}
-                                                            {idx < JOURNEY_STEPS.length - 1 && (
-                                                                <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
-                                                                    <div
-                                                                        className={`h-full transition-all ${events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
-                                                                            }`}
-                                                                    />
-                                                                </div>
-                                                            )}
-                                                        </React.Fragment>
+                                                            <span className="text-[10px] text-slate-400 font-mono">{eventTime}</span>
+                                                        </div>
                                                     );
                                                 })}
                                             </div>
                                         </div>
-
-                                        {/* Detalhes Técnicos / Timeline Vertical Reduzida */}
-                                        <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2">
-                                            {events.map((ev, idx) => {
-                                                const eventTime = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
-
-                                                let detail = '';
-                                                switch (ev.event) {
-                                                    case 'consulta_iniciada':
-                                                        detail = `Busca realizada para ${ev.data?.adultos || 0} adulto(s)`;
-                                                        break;
-                                                    case 'consulta_sucesso':
-                                                        detail = `${ev.data?.quartos || 0} quarto(s) disponível(is)`;
-                                                        break;
-                                                    case 'consulta_vazia':
-                                                        detail = 'Nenhum quarto disponível para este período';
-                                                        break;
-                                                    case 'carrinho_adicionado':
-                                                        detail = `${ev.data?.quantidade || 0} item(ns) adicionado(s)`;
-                                                        break;
-                                                    case 'orcamento_visualizado':
-                                                        detail = `Valor do orçamento: R$ ${ev.data?.total || 0}`;
-                                                        break;
-                                                    case 'whatsapp_enviado':
-                                                        detail = `Contato via WhatsApp por ${ev.data?.cliente || 'Cliente'} (R$ ${ev.data?.total || 0})`;
-                                                        break;
-                                                    case 'abandono':
-                                                        detail = `Abandonou a página na etapa: ${ev.data?.stage || 'desconhecida'}`;
-                                                        break;
-                                                    default:
-                                                        detail = JSON.stringify(ev.data || {});
-                                                }
-
-                                                return (
-                                                    <div key={idx} className="flex items-center justify-between text-xs text-slate-600 hover:text-slate-900">
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
-                                                            <span className="font-semibold capitalize text-slate-700">{ev.event.replace('_', ' ')}:</span>
-                                                            <span className="text-slate-500">{detail}</span>
-                                                        </div>
-                                                        <span className="text-[10px] text-slate-400 font-mono">{eventTime}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
                     );
                 })()}
             </div>
+
             {/* Conversas */}
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden">
