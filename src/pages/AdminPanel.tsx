@@ -235,29 +235,34 @@ export const AdminPanel: React.FC = () => {
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">🧑‍💻 Jornadas dos Clientes</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
                 {(() => {
-                    // 🔥 ORDENA OS EVENTOS POR TIMESTAMP (crescente) ANTES DE AGRUPAR
-                    const sortedEvents = [...trackingEvents]
-                        .filter(ev => ev.event !== 'teste_final' && ev.event !== 'diagnostico' && ev.event !== 'teste')
-                        .sort((a, b) => {
-                            const ta = new Date(a.timestamp).getTime();
-                            const tb = new Date(b.timestamp).getTime();
-                            return ta - tb; // crescente
-                        });
+                    // 1. Definição da ordem ideal dos passos da jornada
+                    const JOURNEY_STEPS = [
+                        { key: 'consulta_iniciada', label: 'Consulta', icon: '🔍' },
+                        { key: 'consulta_sucesso', label: 'Sucesso', icon: '✅' },
+                        { key: 'carrinho_adicionado', label: 'Carrinho', icon: '🛒' },
+                        { key: 'orcamento_visualizado', label: 'Orçamento', icon: '📋' },
+                        { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
+                    ];
 
-                    // Agrupa por sessionId mantendo a ordem
-                    const sessions: Record<string, TrackingEvent[]> = {};
+                    // Ordena os eventos por timestamp (crescente)
+                    const sortedEvents = [...trackingEvents]
+                        .filter(ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event))
+                        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+                    // Agrupa por sessionId
+                    const sessions: Record<string, typeof trackingEvents> = {};
                     sortedEvents.forEach(ev => {
                         if (!sessions[ev.sessionId]) sessions[ev.sessionId] = [];
                         sessions[ev.sessionId].push(ev);
                     });
 
-                    // Ordena sessões pela data do último evento (mais recente primeiro)
+                    // Ordena sessões (mais recentes primeiro)
                     const sortedSessions = Object.entries(sessions)
                         .map(([sessionId, events]) => ({ sessionId, events }))
                         .sort((a, b) => {
                             const aTime = new Date(a.events[a.events.length - 1]?.timestamp).getTime();
                             const bTime = new Date(b.events[b.events.length - 1]?.timestamp).getTime();
-                            return bTime - aTime; // mais recente primeiro
+                            return bTime - aTime;
                         });
 
                     if (sortedSessions.length === 0) {
@@ -265,113 +270,138 @@ export const AdminPanel: React.FC = () => {
                     }
 
                     return (
-                        <div className="divide-y divide-gray-200">
+                        <div className="divide-y divide-gray-100">
                             {sortedSessions.slice(0, 20).map(({ sessionId, events }) => {
-                                const shortId = sessionId.length > 30
-                                    ? sessionId.substring(0, 15) + '...'
-                                    : sessionId;
+                                const shortId = sessionId.length > 20 ? `${sessionId.substring(0, 10)}...` : sessionId;
 
-                                // Status geral da jornada
+                                // Mapeamento de status e cores
                                 const hasWhatsApp = events.some(e => e.event === 'whatsapp_enviado');
-                                const hasAbandono = events.some(e => e.event === 'abandono');
+                                const hasAbandono = events.some(e => e.event === 'abandono' || e.event === 'consulta_vazia');
                                 const hasCarrinho = events.some(e => e.event === 'carrinho_adicionado');
                                 const hasSucesso = events.some(e => e.event === 'consulta_sucesso');
-                                const hasConsulta = events.some(e => e.event === 'consulta_iniciada');
 
                                 let status = '🔄 Em andamento';
-                                let statusColor = 'bg-blue-100 text-blue-700';
+                                let statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
+
                                 if (hasWhatsApp) {
                                     status = '✅ Convertido';
-                                    statusColor = 'bg-green-100 text-green-700';
-                                } else if (hasAbandono || (hasSucesso && !hasCarrinho)) {
+                                    statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                } else if (hasAbandono) {
                                     status = '🚫 Abandonou';
-                                    statusColor = 'bg-red-100 text-red-700';
-                                } else if (hasCarrinho && !hasWhatsApp) {
+                                    statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
+                                } else if (hasCarrinho) {
                                     status = '🛒 No carrinho';
-                                    statusColor = 'bg-purple-100 text-purple-700';
-                                } else if (hasSucesso && !hasCarrinho) {
+                                    statusColor = 'bg-purple-50 text-purple-700 border-purple-200';
+                                } else if (hasSucesso) {
                                     status = '👀 Viu quartos';
-                                    statusColor = 'bg-amber-100 text-amber-700';
-                                } else if (hasConsulta && !hasSucesso) {
-                                    status = '❌ Sem disponibilidade';
-                                    statusColor = 'bg-red-100 text-red-700';
+                                    statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
                                 }
 
                                 const lastEvent = events[events.length - 1];
                                 const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
 
-                                // 🔥 NÃO REPETIR DETALHES NO CABEÇALHO (serão exibidos no evento consulta_iniciada)
+                                // Dados da consulta inicial para badge no topo
                                 const consulta = events.find(e => e.event === 'consulta_iniciada');
-                                let details = '';
-                                if (consulta?.data) {
-                                    const d = consulta.data;
-                                    details = `Check-in: ${d.checkin || '-'} | Check-out: ${d.checkout || '-'} | ${d.adultos || 0} adulto(s)`;
-                                    if (d.criancas && d.criancas > 0) {
-                                        details += ` + ${d.criancas} criança(s)`;
-                                    }
-                                }
+                                const d = consulta?.data;
 
                                 return (
-                                    <div key={sessionId} className="p-4 hover:bg-gray-50">
-                                        {/* Cabeçalho da sessão (sem detalhes repetidos) */}
-                                        <div className="flex items-center justify-between mb-2">
-                                            <div className="flex items-center gap-3">
-                                                <span className="font-mono text-xs text-[#1e293b] bg-gray-100 px-2 py-1 rounded">{shortId}</span>
-                                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor}`}>{status}</span>
-                                                {details && <span className="text-xs text-gray-600 hidden sm:inline">{details}</span>}
+                                    <div key={sessionId} className="p-5 hover:bg-slate-50/50 transition-colors">
+                                        {/* Header da Sessão */}
+                                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-mono text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
+                                                    {shortId}
+                                                </span>
+                                                <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusColor}`}>
+                                                    {status}
+                                                </span>
+                                                {d && (
+                                                    <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                                                        📅 {d.checkin || '-'} até {d.checkout || '-'} • 👥 {d.adultos || 0}a{d.criancas ? ` + ${d.criancas}c` : ''}
+                                                    </span>
+                                                )}
                                             </div>
-                                            <span className="text-xs text-gray-400">{lastTime}</span>
+                                            <span className="text-xs font-medium text-slate-400">{lastTime}</span>
                                         </div>
 
-                                        {/* Lista de eventos (já ordenados) */}
-                                        <div className="ml-4 space-y-1">
+                                        {/* Visualização Visual da Jornada (Stepper Horizontal) */}
+                                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
+                                            <div className="flex items-center justify-between relative">
+                                                {JOURNEY_STEPS.map((step, idx) => {
+                                                    const stepEvent = events.find(e => e.event === step.key);
+                                                    const isCompleted = !!stepEvent;
+
+                                                    return (
+                                                        <React.Fragment key={step.key}>
+                                                            <div className="flex flex-col items-center z-10">
+                                                                <div
+                                                                    className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted
+                                                                            ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
+                                                                            : 'bg-slate-200 text-slate-400'
+                                                                        }`}
+                                                                >
+                                                                    {step.icon}
+                                                                </div>
+                                                                <span className={`text-[11px] mt-1 font-medium ${isCompleted ? 'text-slate-800' : 'text-slate-400'}`}>
+                                                                    {step.label}
+                                                                </span>
+                                                            </div>
+
+                                                            {/* Linha Conectora entre os passos */}
+                                                            {idx < JOURNEY_STEPS.length - 1 && (
+                                                                <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
+                                                                    <div
+                                                                        className={`h-full transition-all ${events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
+                                                                            }`}
+                                                                    />
+                                                                </div>
+                                                            )}
+                                                        </React.Fragment>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        {/* Detalhes Técnicos / Timeline Vertical Reduzida */}
+                                        <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2">
                                             {events.map((ev, idx) => {
-                                                const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString('pt-BR') : '';
+                                                const eventTime = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+
                                                 let detail = '';
-                                                let icon = '';
                                                 switch (ev.event) {
                                                     case 'consulta_iniciada':
-                                                        icon = '🔍';
-                                                        const d = ev.data;
-                                                        detail = `Check-in: ${d?.checkin || '-'} | Check-out: ${d?.checkout || '-'} | ${d?.adultos || 0} adulto(s)`;
-                                                        if (d?.criancas && d.criancas > 0) {
-                                                            detail += ` + ${d.criancas} criança(s)`;
-                                                        }
+                                                        detail = `Busca realizada para ${ev.data?.adultos || 0} adulto(s)`;
                                                         break;
                                                     case 'consulta_sucesso':
-                                                        icon = '✅';
                                                         detail = `${ev.data?.quartos || 0} quarto(s) disponível(is)`;
                                                         break;
                                                     case 'consulta_vazia':
-                                                        icon = '❌';
-                                                        detail = 'Nenhum quarto disponível';
+                                                        detail = 'Nenhum quarto disponível para este período';
                                                         break;
                                                     case 'carrinho_adicionado':
-                                                        icon = '🛒';
-                                                        detail = `${ev.data?.quantidade || 0} quarto(s) adicionado(s)`;
+                                                        detail = `${ev.data?.quantidade || 0} item(ns) adicionado(s)`;
                                                         break;
                                                     case 'orcamento_visualizado':
-                                                        icon = '📋';
-                                                        detail = `Total: R$ ${ev.data?.total || 0}`;
+                                                        detail = `Valor do orçamento: R$ ${ev.data?.total || 0}`;
                                                         break;
                                                     case 'whatsapp_enviado':
-                                                        icon = '💬';
-                                                        detail = `Cliente: ${ev.data?.cliente || 'N/A'} | Total: R$ ${ev.data?.total || 0}`;
+                                                        detail = `Contato via WhatsApp por ${ev.data?.cliente || 'Cliente'} (R$ ${ev.data?.total || 0})`;
                                                         break;
                                                     case 'abandono':
-                                                        icon = '🚫';
-                                                        detail = `Abandono após ${ev.data?.stage || 'consulta'}`;
+                                                        detail = `Abandonou a página na etapa: ${ev.data?.stage || 'desconhecida'}`;
                                                         break;
                                                     default:
-                                                        icon = '📌';
-                                                        detail = ev.event;
+                                                        detail = JSON.stringify(ev.data || {});
                                                 }
+
                                                 return (
-                                                    <div key={idx} className="flex items-center gap-3 text-xs text-gray-600 border-b border-gray-100 pb-1 last:border-0">
-                                                        <span>{icon}</span>
-                                                        <span className="font-medium">{ev.event.replace('_', ' ')}</span>
-                                                        <span className="text-gray-500 flex-1">{detail}</span>
-                                                        <span className="text-gray-400">{time}</span>
+                                                    <div key={idx} className="flex items-center justify-between text-xs text-slate-600 hover:text-slate-900">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                                                            <span className="font-semibold capitalize text-slate-700">{ev.event.replace('_', ' ')}:</span>
+                                                            <span className="text-slate-500">{detail}</span>
+                                                        </div>
+                                                        <span className="text-[10px] text-slate-400 font-mono">{eventTime}</span>
                                                     </div>
                                                 );
                                             })}
@@ -379,11 +409,6 @@ export const AdminPanel: React.FC = () => {
                                     </div>
                                 );
                             })}
-                            {sortedSessions.length > 20 && (
-                                <div className="text-center text-xs text-gray-400 py-2">
-                                    Mostrando 20 de {sortedSessions.length} sessões
-                                </div>
-                            )}
                         </div>
                     );
                 })()}
