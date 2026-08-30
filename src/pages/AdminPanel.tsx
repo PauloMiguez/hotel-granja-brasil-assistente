@@ -243,7 +243,7 @@ export const AdminPanel: React.FC = () => {
             {/* ========= JORNADAS DOS CLIENTES ========= */}
             <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-2 mb-4 gap-2">
                 <h2 className="text-xl font-semibold text-[#1e293b]">🧑‍💻 Jornadas dos Clientes</h2>
-                
+
                 {/* 🔍 FILTRO DE DATA */}
                 <div className="flex items-center gap-2">
                     <label className="text-xs text-slate-500 font-medium">Filtrar por data:</label>
@@ -275,18 +275,21 @@ export const AdminPanel: React.FC = () => {
                         { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
                     ];
 
-                    // 1. Filtra eventos válidos e por data (se houver uma data selecionada)
+                    // 1. Filtra eventos válidos e por data (com correção de fuso horário)
                     const filteredEventsByDate = trackingEvents
                         .filter(ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event))
                         .filter(ev => {
                             if (!selectedDate) return true;
                             if (!ev.timestamp) return false;
-                            
-                            // Formata o timestamp do evento para YYYY-MM-DD considerando a timezone local
-                            const eventDate = new Date(ev.timestamp);
-                            const year = eventDate.getFullYear();
-                            const month = String(eventDate.getMonth() + 1).padStart(2, '0');
-                            const day = String(eventDate.getDate()).padStart(2, '0');
+
+                            // Trata o timestamp e converte para a data local em formato YYYY-MM-DD
+                            const d = new Date(ev.timestamp);
+                            if (isNaN(d.getTime())) return false; // descarta timestamps inválidos
+
+                            // Extrai a data local formatada no padrão YYYY-MM-DD
+                            const year = d.getFullYear();
+                            const month = String(d.getMonth() + 1).padStart(2, '0');
+                            const day = String(d.getDate()).padStart(2, '0');
                             const eventFormattedDate = `${year}-${month}-${day}`;
 
                             return eventFormattedDate === selectedDate;
@@ -402,11 +405,10 @@ export const AdminPanel: React.FC = () => {
                                                             <React.Fragment key={step.key}>
                                                                 <div className="flex flex-col items-center z-10">
                                                                     <div
-                                                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
-                                                                            isCompleted
+                                                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted
                                                                                 ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
                                                                                 : 'bg-slate-200 text-slate-400'
-                                                                        }`}
+                                                                            }`}
                                                                     >
                                                                         {step.icon}
                                                                     </div>
@@ -419,9 +421,8 @@ export const AdminPanel: React.FC = () => {
                                                                 {idx < JOURNEY_STEPS.length - 1 && (
                                                                     <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
                                                                         <div
-                                                                            className={`h-full transition-all ${
-                                                                                events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
-                                                                            }`}
+                                                                            className={`h-full transition-all ${events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
+                                                                                }`}
                                                                         />
                                                                     </div>
                                                                 )}
