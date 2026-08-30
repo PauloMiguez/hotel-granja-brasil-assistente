@@ -7,6 +7,7 @@ interface Conversation {
     total_messages: number;
     last_updated: string;
     source: string;
+    messages: Message[];
 }
 
 interface Message {
@@ -76,63 +77,20 @@ export const AdminPanel: React.FC = () => {
     };
 
     // ========= BUSCAR DETALHES DE UMA CONVERSA (PARSER COMPLETO) =========
-    const handleViewConversation = async (convId: string) => {
+    const handleViewConversation = (convId: string) => {
         setSelectedConvId(convId);
         setLoadingConv(true);
-        setConvMessages([]);
 
-        try {
-            const res = await fetch(`${WORKER_URL}/conversa/${encodeURIComponent(convId)}`);
-            const data = await res.json();
-            console.log("Resposta da API de conversa:", data); // Verifique no Console do Navegador (F12)
+        // Procura a conversa dentro da lista que já foi baixada
+        const conv = filtered.find(c => c.id === convId);
 
-            let rawList: any[] = [];
-
-            // 1. Tenta extrair a lista de mensagens de diversas estruturas comuns
-            if (data.success && data.data) {
-                if (Array.isArray(data.data.messages)) rawList = data.data.messages;
-                else if (Array.isArray(data.data.historico)) rawList = data.data.historico;
-                else if (Array.isArray(data.data)) rawList = data.data;
-                // Trata estrutura vinda diretamente da API REST do Firestore
-                else if (data.data.fields?.messages?.arrayValue?.values) {
-                    rawList = data.data.fields.messages.arrayValue.values;
-                } else if (data.data.fields?.historico?.arrayValue?.values) {
-                    rawList = data.data.fields.historico.arrayValue.values;
-                }
-            } else if (Array.isArray(data.messages)) {
-                rawList = data.messages;
-            } else if (Array.isArray(data)) {
-                rawList = data;
-            }
-
-            // 2. Mapeia e extrai os campos 'role', 'content' e 'timestamp' de cada item
-            const parsedMsgs: Message[] = rawList.map((item: any) => {
-                // Se for do formato Firestore
-                if (item.mapValue?.fields) {
-                    const f = item.mapValue.fields;
-                    return {
-                        role: f.role?.stringValue || f.sender?.stringValue || 'user',
-                        content: f.content?.stringValue || f.texto?.stringValue || f.message?.stringValue || '',
-                        timestamp: f.timestamp?.stringValue || f.timestamp?.timestampValue || ''
-                    };
-                }
-
-                // Se for objeto JSON comum
-                return {
-                    role: item.role || item.sender || item.tipo || 'user',
-                    content: typeof item.content === 'string'
-                        ? item.content
-                        : item.texto || item.message || item.text || JSON.stringify(item),
-                    timestamp: item.timestamp || item.created_at || item.date
-                };
-            }).filter(m => Boolean(m.content));
-
-            setConvMessages(parsedMsgs);
-        } catch (e) {
-            console.error('Erro ao buscar mensagens:', e);
-        } finally {
-            setLoadingConv(false);
+        if (conv && conv.messages && conv.messages.length > 0) {
+            setConvMessages(conv.messages);
+        } else {
+            setConvMessages([]);
         }
+
+        setLoadingConv(false);
     };
 
     // ========= BUSCAR TRACKING =========
@@ -178,10 +136,22 @@ export const AdminPanel: React.FC = () => {
         return docs.map((doc: any) => {
             const f = doc.fields || {};
             const id = f.conversation_id?.stringValue || doc.name?.split('/').pop() || 'N/A';
-            const msgs = Number(f.metadata?.mapValue?.fields?.total_messages?.integerValue) || 0;
+            const msgsCount = Number(f.metadata?.mapValue?.fields?.total_messages?.integerValue) || 0;
             const updated = f.metadata?.mapValue?.fields?.last_updated?.timestampValue || '';
             const source = f.metadata?.mapValue?.fields?.source?.stringValue || 'chat_web';
-            return { id, total_messages: msgs, last_updated: updated, source };
+
+            // 🔥 Extrai o array de mensagens salvo no documento do Firestore
+            const rawMessages = f.messages?.arrayValue?.values || f.historico?.arrayValue?.values || [];
+            const messages: Message[] = rawMessages.map((m: any) => {
+                const mf = m.mapValue?.fields || {};
+                return {
+                    role: mf.role?.stringValue || mf.sender?.stringValue || 'user',
+                    content: mf.content?.stringValue || mf.texto?.stringValue || mf.message?.stringValue || '',
+                    timestamp: mf.timestamp?.stringValue || mf.timestamp?.timestampValue || ''
+                };
+            }).filter((m: Message) => Boolean(m.content));
+
+            return { id, total_messages: msgsCount, last_updated: updated, source, messages };
         }).filter(c => c.id !== 'N/A');
     };
 
@@ -480,8 +450,8 @@ export const AdminPanel: React.FC = () => {
                                                                 <div className="flex flex-col items-center z-10">
                                                                     <div
                                                                         className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted
-                                                                                ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
-                                                                                : 'bg-slate-200 text-slate-400'
+                                                                            ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
+                                                                            : 'bg-slate-200 text-slate-400'
                                                                             }`}
                                                                     >
                                                                         {step.icon}
@@ -630,8 +600,8 @@ export const AdminPanel: React.FC = () => {
                                         >
                                             <div
                                                 className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${isUser
-                                                        ? 'bg-indigo-600 text-white rounded-br-none'
-                                                        : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
+                                                    ? 'bg-indigo-600 text-white rounded-br-none'
+                                                    : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
                                                     }`}
                                             >
                                                 <div className="font-semibold text-[10px] mb-1 opacity-75">
