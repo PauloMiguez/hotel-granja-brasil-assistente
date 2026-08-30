@@ -9,6 +9,12 @@ interface Conversation {
     source: string;
 }
 
+interface Message {
+    role: string;
+    content: string;
+    timestamp?: string;
+}
+
 interface TrackingStats {
     consultas: number;
     sucesso: number;
@@ -39,7 +45,12 @@ export const AdminPanel: React.FC = () => {
     const [error, setError] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
 
-    // Filtro de data da jornada (Padrão: Hoje no formato YYYY-MM-DD local)
+    // 🔥 ESTADOS PARA O MODAL DE VER CONVERSA
+    const [selectedConvId, setSelectedConvId] = useState<string | null>(null);
+    const [convMessages, setConvMessages] = useState<Message[]>([]);
+    const [loadingConv, setLoadingConv] = useState(false);
+
+    // Filtro de data da jornada (Padrão: Hoje YYYY-MM-DD local)
     const [selectedDate, setSelectedDate] = useState<string>(() => {
         const today = new Date();
         const year = today.getFullYear();
@@ -61,6 +72,33 @@ export const AdminPanel: React.FC = () => {
         } catch (e) {
             console.error(e);
             setError('Erro ao carregar conversas');
+        }
+    };
+
+    // ========= BUSCAR DETALHES DE UMA CONVERSA =========
+    const handleViewConversation = async (convId: string) => {
+        setSelectedConvId(convId);
+        setLoadingConv(true);
+        setConvMessages([]);
+        try {
+            const res = await fetch(`${WORKER_URL}/conversa/${encodeURIComponent(convId)}`);
+            const data = await res.json();
+            if (data.success && data.data) {
+                // Tenta extrair as mensagens do formato do payload retornado
+                const rawMsgs = data.data.messages || data.data.historico || [];
+                const parsedMsgs: Message[] = rawMsgs.map((m: any) => ({
+                    role: m.role || m.sender || 'user',
+                    content: m.content || m.texto || m.message || JSON.stringify(m),
+                    timestamp: m.timestamp
+                }));
+                setConvMessages(parsedMsgs);
+            } else if (Array.isArray(data.messages)) {
+                setConvMessages(data.messages);
+            }
+        } catch (e) {
+            console.error('Erro ao buscar mensagens:', e);
+        } finally {
+            setLoadingConv(false);
         }
     };
 
@@ -500,19 +538,98 @@ export const AdminPanel: React.FC = () => {
                 </div>
                 {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => (
                     <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
-                        <span className="font-mono text-xs text-[#1e293b] truncate">{conv.id.substring(0, 20)}...</span>
+                        <span className="font-mono text-xs text-[#1e293b] truncate" title={conv.id}>{conv.id.substring(0, 20)}...</span>
                         <span>{conv.total_messages}</span>
                         <span className="text-gray-600 text-xs">{new Date(conv.last_updated).toLocaleString('pt-BR')}</span>
                         <span>{conv.source}</span>
-                        <button className="bg-[#1e293b] text-white px-2 py-1 rounded text-xs hover:bg-[#2d3a4f]">Ver</button>
+                        {/* 🔥 AÇÃO CONECTADA */}
+                        <button
+                            onClick={() => handleViewConversation(conv.id)}
+                            className="bg-[#1e293b] text-white px-3 py-1.5 rounded text-xs hover:bg-[#2d3a4f] transition-colors font-medium cursor-pointer w-fit"
+                        >
+                            Ver Conversa
+                        </button>
                     </div>
                 ))}
             </div>
+
             {filtered.length > pageSize && (
                 <div className="flex justify-center gap-2 mt-4">
                     <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 border rounded disabled:opacity-50">◀</button>
                     <span className="px-3 py-1">{currentPage} de {Math.ceil(filtered.length / pageSize)}</span>
                     <button onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))} disabled={currentPage === Math.ceil(filtered.length / pageSize)} className="px-3 py-1 border rounded disabled:opacity-50">▶</button>
+                </div>
+            )}
+
+            {/* 🔥 MODAL PARA VISUALIZAÇÃO DAS MENSAGENS */}
+            {selectedConvId && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden border border-slate-100">
+                        {/* Cabeçalho do Modal */}
+                        <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
+                            <div>
+                                <h3 className="font-semibold text-sm">Conversa Detalhada</h3>
+                                <p className="font-mono text-xs text-slate-300 truncate max-w-md">{selectedConvId}</p>
+                            </div>
+                            <button
+                                onClick={() => setSelectedConvId(null)}
+                                className="text-slate-400 hover:text-white p-1 rounded-lg text-lg leading-none"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {/* Conteúdo das Mensagens */}
+                        <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-slate-50 min-h-[300px]">
+                            {loadingConv ? (
+                                <div className="flex justify-center items-center h-48 text-slate-500 text-sm">
+                                    Carregando mensagens...
+                                </div>
+                            ) : convMessages.length === 0 ? (
+                                <div className="text-center py-12 text-slate-400 text-sm">
+                                    Nenhuma mensagem encontrada para esta conversa.
+                                </div>
+                            ) : (
+                                convMessages.map((msg, idx) => {
+                                    const isUser = msg.role === 'user' || msg.role === 'cliente';
+                                    return (
+                                        <div
+                                            key={idx}
+                                            className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
+                                        >
+                                            <div
+                                                className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${
+                                                    isUser
+                                                        ? 'bg-indigo-600 text-white rounded-br-none'
+                                                        : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
+                                                }`}
+                                            >
+                                                <div className="font-semibold text-[10px] mb-1 opacity-75">
+                                                    {isUser ? '👤 Cliente' : '🤖 Assistente'}
+                                                </div>
+                                                <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                                            </div>
+                                            {msg.timestamp && (
+                                                <span className="text-[10px] text-slate-400 mt-1 px-1">
+                                                    {new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                </span>
+                                            )}
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+
+                        {/* Rodapé do Modal */}
+                        <div className="p-3 bg-white border-t border-slate-100 flex justify-end">
+                            <button
+                                onClick={() => setSelectedConvId(null)}
+                                className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-4 py-2 rounded-lg font-medium transition-colors"
+                            >
+                                Fechar
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
