@@ -275,55 +275,68 @@ export const AdminPanel: React.FC = () => {
                         { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
                     ];
 
-                    // 1. Filtra eventos válidos e por data (com correção de fuso horário)
-                    const filteredEventsByDate = trackingEvents
-                        .filter(ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event))
-                        .filter(ev => {
-                            if (!selectedDate) return true;
-                            if (!ev.timestamp) return false;
+                    // 1. Limpa eventos ignorados
+                    const validEvents = trackingEvents.filter(
+                        ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
+                    );
 
-                            // Trata o timestamp e converte para a data local em formato YYYY-MM-DD
-                            const d = new Date(ev.timestamp);
-                            if (isNaN(d.getTime())) return false; // descarta timestamps inválidos
-
-                            // Extrai a data local formatada no padrão YYYY-MM-DD
-                            const year = d.getFullYear();
-                            const month = String(d.getMonth() + 1).padStart(2, '0');
-                            const day = String(d.getDate()).padStart(2, '0');
-                            const eventFormattedDate = `${year}-${month}-${day}`;
-
-                            return eventFormattedDate === selectedDate;
-                        });
-
-                    // 2. Ordena os eventos filtrados por timestamp (crescente)
-                    const sortedEvents = [...filteredEventsByDate].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-                    // 3. Agrupa por sessionId
-                    const sessions: Record<string, typeof trackingEvents> = {};
-                    sortedEvents.forEach(ev => {
-                        if (!sessions[ev.sessionId]) sessions[ev.sessionId] = [];
-                        sessions[ev.sessionId].push(ev);
+                    // 2. Agrupa TODOS os eventos por sessionId primeiro
+                    const sessionsMap: Record<string, typeof trackingEvents> = {};
+                    validEvents.forEach(ev => {
+                        if (!sessionsMap[ev.sessionId]) sessionsMap[ev.sessionId] = [];
+                        sessionsMap[ev.sessionId].push(ev);
                     });
 
-                    // 4. Ordena sessões (mais recentes primeiro)
-                    const sortedSessions = Object.entries(sessions)
-                        .map(([sessionId, events]) => ({ sessionId, events }))
-                        .sort((a, b) => {
-                            const aTime = new Date(a.events[a.events.length - 1]?.timestamp).getTime();
-                            const bTime = new Date(b.events[b.events.length - 1]?.timestamp).getTime();
-                            return bTime - aTime;
-                        });
+                    // 3. Ordena os eventos dentro de cada sessão por timestamp (crescente)
+                    Object.keys(sessionsMap).forEach(sId => {
+                        sessionsMap[sId].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                    });
+
+                    // 4. Converte em array de sessões
+                    let allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => ({
+                        sessionId,
+                        events,
+                        // Pega a data de início da sessão (primeiro evento)
+                        startTime: events[0]?.timestamp ? new Date(events[0].timestamp) : new Date(0),
+                        // Pega a data da última atividade (último evento)
+                        lastTime: events[events.length - 1]?.timestamp ? new Date(events[events.length - 1].timestamp) : new Date(0)
+                    }));
+
+                    // Função utilitária para extrair YYYY-MM-DD considerando TANTO local quanto ISO/UTC
+                    const matchesDate = (dateObj: Date, targetDateStr: string) => {
+                        if (isNaN(dateObj.getTime())) return false;
+
+                        // Formato local YYYY-MM-DD
+                        const y = dateObj.getFullYear();
+                        const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+                        const d = String(dateObj.getDate()).padStart(2, '0');
+                        const localStr = `${y}-${m}-${d}`;
+
+                        // Formato ISO/UTC YYYY-MM-DD
+                        const isoStr = dateObj.toISOString().slice(0, 10);
+
+                        return localStr === targetDateStr || isoStr === targetDateStr;
+                    };
+
+                    // 5. Filtra as SESSÕES por data (se houver data selecionada)
+                    const filteredSessions = allSessions.filter(session => {
+                        if (!selectedDate) return true;
+                        // Valida se QUALQUER evento da sessão ocorreu no dia selecionado ou se a sessão iniciou/terminou nesse dia
+                        return session.events.some(ev => matchesDate(new Date(ev.timestamp), selectedDate));
+                    });
+
+                    // 6. Ordena as sessões (mais recentes primeiro)
+                    const sortedSessions = filteredSessions.sort((a, b) => b.lastTime.getTime() - a.lastTime.getTime());
 
                     if (sortedSessions.length === 0) {
                         return (
                             <div className="text-gray-500 text-center py-12">
                                 <div className="text-3xl mb-2">📅</div>
-                                Nenhuma jornada registrada para {selectedDate ? new Date(selectedDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'o período'}.
+                                Nenhuma jornada registrada para {selectedDate ? selectedDate.split('-').reverse().join('/') : 'o período'}.
                             </div>
                         );
                     }
 
-                    // Métricas rápidas do dia filtrado
                     const totalSessions = sortedSessions.length;
                     const convertedSessions = sortedSessions.filter(s => s.events.some(e => e.event === 'whatsapp_enviado')).length;
                     const abandonedSessions = sortedSessions.filter(s => s.events.some(e => e.event === 'abandono' || e.event === 'consulta_vazia')).length;
@@ -333,7 +346,7 @@ export const AdminPanel: React.FC = () => {
                             {/* Barra informativa do filtro */}
                             <div className="bg-slate-50 px-5 py-2.5 border-b border-slate-200 text-xs text-slate-600 flex flex-wrap gap-4 items-center justify-between">
                                 <div>
-                                    Exibindo <strong>{totalSessions}</strong> sessão(ões) {selectedDate ? `para o dia ${new Date(selectedDate + 'T00:00:00').toLocaleDateString('pt-BR')}` : 'no total'}.
+                                    Exibindo <strong>{totalSessions}</strong> sessão(ões) {selectedDate ? `para o dia ${selectedDate.split('-').reverse().join('/')}` : 'no total'}.
                                 </div>
                                 <div className="flex gap-3">
                                     <span className="text-emerald-700 font-medium">✅ {convertedSessions} Convertidas</span>
@@ -369,7 +382,7 @@ export const AdminPanel: React.FC = () => {
                                     }
 
                                     const lastEvent = events[events.length - 1];
-                                    const lastTime = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
+                                    const lastTimeStr = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
 
                                     const consulta = events.find(e => e.event === 'consulta_iniciada');
                                     const d = consulta?.data;
@@ -391,7 +404,7 @@ export const AdminPanel: React.FC = () => {
                                                         </span>
                                                     )}
                                                 </div>
-                                                <span className="text-xs font-medium text-slate-400">{lastTime}</span>
+                                                <span className="text-xs font-medium text-slate-400">{lastTimeStr}</span>
                                             </div>
 
                                             {/* Stepper Horizontal */}
@@ -417,7 +430,6 @@ export const AdminPanel: React.FC = () => {
                                                                     </span>
                                                                 </div>
 
-                                                                {/* Linha Conectora entre os passos */}
                                                                 {idx < JOURNEY_STEPS.length - 1 && (
                                                                     <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
                                                                         <div
@@ -483,52 +495,51 @@ export const AdminPanel: React.FC = () => {
                         </>
                     );
                 })()}
-            </div>
 
-            {/* Conversas */}
-            <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
-            <div className="bg-white rounded-lg shadow overflow-hidden">
-                <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
-                    <span>ID</span>
-                    <span>Mensagens</span>
-                    <span>Última Atualização</span>
-                    <span>Origem</span>
-                    <span>Ações</span>
-                </div>
-                {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => (
-                    <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
-                        <span className="font-mono text-xs text-[#1e293b] truncate">{conv.id.substring(0, 20)}...</span>
-                        <span>{conv.total_messages}</span>
-                        <span className="text-gray-600 text-xs">{new Date(conv.last_updated).toLocaleString('pt-BR')}</span>
-                        <span>{conv.source}</span>
-                        <button className="bg-[#1e293b] text-white px-2 py-1 rounded text-xs hover:bg-[#2d3a4f]">Ver</button>
+                {/* Conversas */}
+                <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
+                <div className="bg-white rounded-lg shadow overflow-hidden">
+                    <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
+                        <span>ID</span>
+                        <span>Mensagens</span>
+                        <span>Última Atualização</span>
+                        <span>Origem</span>
+                        <span>Ações</span>
                     </div>
-                ))}
-            </div>
-            {filtered.length > pageSize && (
-                <div className="flex justify-center gap-2 mt-4">
-                    <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 border rounded disabled:opacity-50">◀</button>
-                    <span className="px-3 py-1">{currentPage} de {Math.ceil(filtered.length / pageSize)}</span>
-                    <button onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))} disabled={currentPage === Math.ceil(filtered.length / pageSize)} className="px-3 py-1 border rounded disabled:opacity-50">▶</button>
+                    {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => (
+                        <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
+                            <span className="font-mono text-xs text-[#1e293b] truncate">{conv.id.substring(0, 20)}...</span>
+                            <span>{conv.total_messages}</span>
+                            <span className="text-gray-600 text-xs">{new Date(conv.last_updated).toLocaleString('pt-BR')}</span>
+                            <span>{conv.source}</span>
+                            <button className="bg-[#1e293b] text-white px-2 py-1 rounded text-xs hover:bg-[#2d3a4f]">Ver</button>
+                        </div>
+                    ))}
                 </div>
-            )}
-        </div>
-    );
+                {filtered.length > pageSize && (
+                    <div className="flex justify-center gap-2 mt-4">
+                        <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 border rounded disabled:opacity-50">◀</button>
+                        <span className="px-3 py-1">{currentPage} de {Math.ceil(filtered.length / pageSize)}</span>
+                        <button onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))} disabled={currentPage === Math.ceil(filtered.length / pageSize)} className="px-3 py-1 border rounded disabled:opacity-50">▶</button>
+                    </div>
+                )}
+            </div>
+            );
 };
 
-const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({ label, value, suffix = '' }) => (
-    <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#1e293b]">
-        <div className="text-2xl font-bold text-[#1e293b]">{value}{suffix}</div>
-        <div className="text-sm text-gray-600">{label}</div>
-    </div>
-);
+            const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({label, value, suffix = ''}) => (
+            <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#1e293b]">
+                <div className="text-2xl font-bold text-[#1e293b]">{value}{suffix}</div>
+                <div className="text-sm text-gray-600">{label}</div>
+            </div>
+            );
 
-const TrackingCard: React.FC<{ label: string; value: number; color?: string }> = ({ label, value, color }) => {
+            const TrackingCard: React.FC<{ label: string; value: number; color?: string }> = ({label, value, color}) => {
     const borderColor = color === 'gold' ? 'border-t-yellow-500' : color === 'red' ? 'border-t-red-500' : 'border-t-[#1e293b]';
-    return (
-        <div className={`bg-white p-3 rounded-lg shadow text-center border-t-4 ${borderColor}`}>
-            <div className="text-2xl font-bold text-[#1e293b]">{value}</div>
-            <div className="text-xs text-gray-600">{label}</div>
-        </div>
-    );
+            return (
+            <div className={`bg-white p-3 rounded-lg shadow text-center border-t-4 ${borderColor}`}>
+                <div className="text-2xl font-bold text-[#1e293b]">{value}</div>
+                <div className="text-xs text-gray-600">{label}</div>
+            </div>
+            );
 };
