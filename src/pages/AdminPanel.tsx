@@ -75,26 +75,59 @@ export const AdminPanel: React.FC = () => {
         }
     };
 
-    // ========= BUSCAR DETALHES DE UMA CONVERSA =========
+    // ========= BUSCAR DETALHES DE UMA CONVERSA (PARSER COMPLETO) =========
     const handleViewConversation = async (convId: string) => {
         setSelectedConvId(convId);
         setLoadingConv(true);
         setConvMessages([]);
+
         try {
             const res = await fetch(`${WORKER_URL}/conversa/${encodeURIComponent(convId)}`);
             const data = await res.json();
+            console.log("Resposta da API de conversa:", data); // Verifique no Console do Navegador (F12)
+
+            let rawList: any[] = [];
+
+            // 1. Tenta extrair a lista de mensagens de diversas estruturas comuns
             if (data.success && data.data) {
-                // Tenta extrair as mensagens do formato do payload retornado
-                const rawMsgs = data.data.messages || data.data.historico || [];
-                const parsedMsgs: Message[] = rawMsgs.map((m: any) => ({
-                    role: m.role || m.sender || 'user',
-                    content: m.content || m.texto || m.message || JSON.stringify(m),
-                    timestamp: m.timestamp
-                }));
-                setConvMessages(parsedMsgs);
+                if (Array.isArray(data.data.messages)) rawList = data.data.messages;
+                else if (Array.isArray(data.data.historico)) rawList = data.data.historico;
+                else if (Array.isArray(data.data)) rawList = data.data;
+                // Trata estrutura vinda diretamente da API REST do Firestore
+                else if (data.data.fields?.messages?.arrayValue?.values) {
+                    rawList = data.data.fields.messages.arrayValue.values;
+                } else if (data.data.fields?.historico?.arrayValue?.values) {
+                    rawList = data.data.fields.historico.arrayValue.values;
+                }
             } else if (Array.isArray(data.messages)) {
-                setConvMessages(data.messages);
+                rawList = data.messages;
+            } else if (Array.isArray(data)) {
+                rawList = data;
             }
+
+            // 2. Mapeia e extrai os campos 'role', 'content' e 'timestamp' de cada item
+            const parsedMsgs: Message[] = rawList.map((item: any) => {
+                // Se for do formato Firestore
+                if (item.mapValue?.fields) {
+                    const f = item.mapValue.fields;
+                    return {
+                        role: f.role?.stringValue || f.sender?.stringValue || 'user',
+                        content: f.content?.stringValue || f.texto?.stringValue || f.message?.stringValue || '',
+                        timestamp: f.timestamp?.stringValue || f.timestamp?.timestampValue || ''
+                    };
+                }
+
+                // Se for objeto JSON comum
+                return {
+                    role: item.role || item.sender || item.tipo || 'user',
+                    content: typeof item.content === 'string'
+                        ? item.content
+                        : item.texto || item.message || item.text || JSON.stringify(item),
+                    timestamp: item.timestamp || item.created_at || item.date
+                };
+            }).filter(m => Boolean(m.content));
+
+            setConvMessages(parsedMsgs);
         } catch (e) {
             console.error('Erro ao buscar mensagens:', e);
         } finally {
@@ -281,7 +314,7 @@ export const AdminPanel: React.FC = () => {
             {/* ========= JORNADAS DOS CLIENTES ========= */}
             <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-2 mb-4 gap-2">
                 <h2 className="text-xl font-semibold text-[#1e293b]">🧑‍💻 Jornadas dos Clientes</h2>
-                
+
                 <div className="flex items-center gap-2">
                     <label className="text-xs text-slate-500 font-medium">Filtrar por data:</label>
                     <input
@@ -446,11 +479,10 @@ export const AdminPanel: React.FC = () => {
                                                             <React.Fragment key={step.key}>
                                                                 <div className="flex flex-col items-center z-10">
                                                                     <div
-                                                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
-                                                                            isCompleted
+                                                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted
                                                                                 ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
                                                                                 : 'bg-slate-200 text-slate-400'
-                                                                        }`}
+                                                                            }`}
                                                                     >
                                                                         {step.icon}
                                                                     </div>
@@ -462,9 +494,8 @@ export const AdminPanel: React.FC = () => {
                                                                 {idx < JOURNEY_STEPS.length - 1 && (
                                                                     <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
                                                                         <div
-                                                                            className={`h-full transition-all ${
-                                                                                events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
-                                                                            }`}
+                                                                            className={`h-full transition-all ${events.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'
+                                                                                }`}
                                                                         />
                                                                     </div>
                                                                 )}
@@ -598,11 +629,10 @@ export const AdminPanel: React.FC = () => {
                                             className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
                                         >
                                             <div
-                                                className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${
-                                                    isUser
+                                                className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${isUser
                                                         ? 'bg-indigo-600 text-white rounded-br-none'
                                                         : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
-                                                }`}
+                                                    }`}
                                             >
                                                 <div className="font-semibold text-[10px] mb-1 opacity-75">
                                                     {isUser ? '👤 Cliente' : '🤖 Assistente'}
