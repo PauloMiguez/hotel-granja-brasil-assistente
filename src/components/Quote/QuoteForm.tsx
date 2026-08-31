@@ -31,7 +31,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
   const [error, setError] = useState('');
   const [showRoomSelector, setShowRoomSelector] = useState(false);
 
-  // Datas padrão
+  // Datas padrão (apenas na montagem)
   useEffect(() => {
     const tomorrow = getTomorrowDate();
     setStartDate(tomorrow);
@@ -43,7 +43,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     setOriginalEndDate(endStr);
   }, []);
 
-  // Se o carrinho já tem itens, trava as datas
+  // Gerencia o travamento das datas quando há itens no carrinho
   useEffect(() => {
     if (state.cart.length > 0) {
       const first = state.cart[0];
@@ -56,6 +56,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         }
       }
     } else {
+      // Quando o carrinho está vazio, NÃO force as datas originais
+      // Apenas define datas padrão se nunca foram definidas
       if (!originalStartDate || !originalEndDate) {
         const tomorrow = getTomorrowDate();
         setStartDate(tomorrow);
@@ -65,10 +67,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         const endStr = end.toISOString().split('T')[0];
         setEndDate(endStr);
         setOriginalEndDate(endStr);
-      } else {
-        setStartDate(originalStartDate);
-        setEndDate(originalEndDate);
       }
+      // Permite que o usuário altere as datas livremente via onChange
     }
   }, [state.cart, startDate, endDate, originalStartDate, originalEndDate]);
 
@@ -154,9 +154,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       return;
     }
 
-    // Tracking: consulta iniciada
     trackEvent('consulta_iniciada', {
-      checkin: startDate, 
+      checkin: startDate,
       checkout: endDate,
       adultos: adults,
       criancas: hasChildren ? childrenCount : 0,
