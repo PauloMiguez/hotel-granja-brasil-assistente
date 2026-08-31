@@ -15,8 +15,7 @@ export const useChat = () => {
     if (!hasWelcomeRef.current && state.messages.length === 0) {
       const welcomeMessage: Message = {
         id: 'welcome',
-        content: `
-Olá! Seja bem-vindo ao Hotel Granja Brasil.
+        content: `Olá! Seja bem-vindo ao Hotel Granja Brasil.
 
 Sou seu assistente virtual e estou aqui para ajudá-lo com:
 
@@ -26,8 +25,7 @@ Sou seu assistente virtual e estou aqui para ajudá-lo com:
 - Esclarecimento de dúvidas
 - Informações sobre estabelecimentos locais
 
-Como posso ajudá-lo hoje?
-        `,
+Como posso ajudá-lo hoje?`,
         isUser: false,
         timestamp: new Date(),
       };
