@@ -10,22 +10,23 @@ export const useChat = () => {
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const hasWelcomeRef = useRef(false);
 
-  // Mensagem de boas-vindas
+  // Mensagem de boas-vindas 
   useEffect(() => {
     if (!hasWelcomeRef.current && state.messages.length === 0) {
       const welcomeMessage: Message = {
         id: 'welcome',
         content: `
-          <p>Olá! Bem-vindo ao <strong>Hotel Granja Brasil</strong>! 👋</p>
-          <p>Sou seu assistente virtual e estou aqui para ajudá-lo com:</p>
-          <ul style="margin: 10px 0; padding-left: 20px;">
-            <li>🏷️ Orçamentos de reservas em tempo real</li>
-            <li>📋 Informações sobre acomodações</li>
-            <li>🌟 Serviços e facilidades</li>
-            <li>❓ Esclarecimento de dúvidas</li>
-            <li>📍 Informações sobre estabelecimentos locais</li>
-          </ul>
-          <p>Como posso ajudá-lo hoje?</p>
+Olá! Seja bem-vindo ao Hotel Granja Brasil.
+
+Sou seu assistente virtual e estou aqui para ajudá-lo com:
+
+- Orçamentos de reservas em tempo real
+- Informações sobre acomodações
+- Serviços e facilidades
+- Esclarecimento de dúvidas
+- Informações sobre estabelecimentos locais
+
+Como posso ajudá-lo hoje?
         `,
         isUser: false,
         timestamp: new Date(),
@@ -61,7 +62,7 @@ export const useChat = () => {
       setShowQuoteForm(true);
       const quoteMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: `<p>💰 Preencha o formulário abaixo para solicitar seu orçamento.</p>`,
+        content: `<p>Preencha o formulário abaixo para solicitar seu orçamento.</p>`,
         isUser: false,
         timestamp: new Date(),
       };
@@ -113,7 +114,7 @@ export const useChat = () => {
           <a href="https://wa.me/${HOTEL_CONFIG.whatsappNumber.replace(/\D/g, '')}" 
              target="_blank" 
              class="inline-block bg-[#25d366] text-white px-4 py-2 rounded-full mt-2 hover:bg-[#20b858]">
-            💬 WhatsApp
+            WhatsApp
           </a>
         `,
         isUser: false,
