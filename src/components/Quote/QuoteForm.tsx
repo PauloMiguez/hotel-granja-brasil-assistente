@@ -43,6 +43,12 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     setOriginalEndDate(endStr);
   }, []);
 
+  // Limpa o erro quando as datas ou configuração de hóspedes mudam
+  useEffect(() => {
+    setError('');
+    setShowRoomSelector(false);
+  }, [startDate, endDate, adults, hasChildren, childrenCount, childAge1, childAge2]);
+
   // Gerencia o travamento das datas quando há itens no carrinho
   useEffect(() => {
     if (state.cart.length > 0) {
@@ -56,8 +62,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         }
       }
     } else {
-      // Quando o carrinho está vazio, NÃO force as datas originais
-      // Apenas define datas padrão se nunca foram definidas
       if (!originalStartDate || !originalEndDate) {
         const tomorrow = getTomorrowDate();
         setStartDate(tomorrow);
@@ -68,11 +72,10 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         setEndDate(endStr);
         setOriginalEndDate(endStr);
       }
-      // Permite que o usuário altere as datas livremente via onChange
     }
   }, [state.cart, startDate, endDate, originalStartDate, originalEndDate]);
 
-  // Validação em tempo real
+  // Validação em tempo real (apenas para exibir avisos, não bloqueia)
   useEffect(() => {
     const childAges = hasChildren
       ? (childrenCount === 1 ? [childAge1] : [childAge1, childAge2])
@@ -83,11 +86,13 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     } else if (validation.message) {
       setError(validation.message);
     } else {
-      setError('');
+      // Não limpa o erro se ele já estiver definido (evita sumir mensagem de disponibilidade)
+      // Apenas se for um erro de validação, mas não temos como diferenciar facilmente,
+      // então deixamos a limpeza para o useEffect de mudança de datas.
     }
   }, [adults, hasChildren, childrenCount, childAge1, childAge2]);
 
-  // Detecção de abandono ao desmontar
+  // Detecção de abandono
   useEffect(() => {
     return () => {
       if (showRoomSelector) {
@@ -96,7 +101,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     };
   }, [showRoomSelector]);
 
-  // Aplica reservas do carrinho sobre disponibilidade
   const applyCartReservationsToAvailability = (baseAvailability: AvailabilityResponse): AvailabilityResponse => {
     if (state.cart.length === 0 || !baseAvailability) return baseAvailability;
     const newAvailability = JSON.parse(JSON.stringify(baseAvailability));
@@ -115,6 +119,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
 
   const handleCheckAvailability = async () => {
     setError('');
+    setShowRoomSelector(false);
+
     if (!startDate || !endDate) {
       setError('Por favor, selecione as datas de check-in e check-out.');
       return;
@@ -198,7 +204,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         trackEvent('consulta_vazia', { checkin: startDate, checkout: endDate });
         setIsLoading(false);
         dispatch({ type: 'SET_LOADING', payload: false });
-        setShowRoomSelector(false);
         return;
       }
 
@@ -217,7 +222,6 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao consultar disponibilidade.');
-      setShowRoomSelector(false);
     } finally {
       setIsLoading(false);
       dispatch({ type: 'SET_LOADING', payload: false });
@@ -370,7 +374,7 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
         <Button
           variant="primary"
           onClick={handleCheckAvailability}
-          disabled={isLoading || (!!error && !error.includes('Atenção'))}
+          disabled={isLoading}
           className="w-full"
         >
           {isLoading ? 'Consultando...' : '🔍 Consultar Disponibilidade'}
