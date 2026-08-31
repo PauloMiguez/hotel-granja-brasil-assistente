@@ -88,7 +88,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({ content, isUser }) => 
         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white shrink-0 ${isUser ? 'bg-[#128c7e]' : 'bg-[#075e54]'}`}>
           {isUser ? '👤' : '🤖'}
         </div>
-        <div className={`max-w-[85%] px-3 py-2 rounded-lg shadow-sm break-words ${isUser ? 'bg-[#dcf8c6] text-black' : 'bg-white'}`}>
+        <div className={`max-w-[85%] px-3 py-1.5 rounded-lg shadow-sm break-words ${isUser ? 'bg-[#dcf8c6] text-black' : 'bg-white'}`}>
           {typeof content === 'string' ? content : content}
         </div>
       </div>
@@ -102,7 +102,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({ content, isUser }) => 
         🤖
       </div>
       <div
-        className="max-w-[85%] px-3 py-2 rounded-lg shadow-sm bg-white"
+        className="max-w-[85%] px-3 py-1.5 rounded-lg shadow-sm bg-white"
         style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
       >
         <div dangerouslySetInnerHTML={{ __html: formatMessage(content) }} />
