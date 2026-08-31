@@ -10,13 +10,14 @@ function App() {
     <AppProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={
-            <div className="min-h-screen bg-[#e5ddd5] flex items-center justify-center">
-              <div className="w-full h-screen bg-[#e5ddd5] overflow-hidden flex flex-col">
+          <Route
+            path="/"
+            element={
+              <div className="h-dvh w-full bg-[#e5ddd5] overflow-hidden">
                 <ChatContainer />
               </div>
-            </div>
-          } />
+            }
+          />
           <Route path="/admin" element={<AdminPanel />} />
         </Routes>
       </BrowserRouter>
