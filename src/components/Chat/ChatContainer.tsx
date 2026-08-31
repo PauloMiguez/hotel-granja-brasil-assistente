@@ -29,18 +29,16 @@ export const ChatContainer: React.FC = () => {
     <>
       {/* Container principal do chat - ocupa 100% da altura disponível */}
       <div className="flex flex-col h-full w-full bg-[#e5ddd5] overflow-hidden">
-        {/* Header */}
-        <div className="bg-[#075e54] text-white p-4 flex items-center gap-2 flex-shrink-0">
-          <span className="text-xl">🏨</span>
-          <span className="font-semibold">Hotel Granja Brasil</span>
-          <span className="ml-auto text-sm flex items-center gap-1">
-            <span className="w-2 h-2 bg-green-400 rounded-full inline-block"></span>
-            <span className="hidden xs:inline">Online</span>
-          </span>
+        {/* Header - apenas o status Online */}
+        <div className="bg-[#075e54] text-white px-4 py-3 flex items-center justify-end flex-shrink-0">
+          <div className="flex items-center gap-1.5 text-sm">
+            <span className="w-2 h-2 bg-green-400 rounded-full inline-block animate-pulse"></span>
+            <span>Online</span>
+          </div>
         </div>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Messages - com espaçamento original */}
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
           <MessageList messages={messages} isTyping={isSending} />
           <div ref={messagesEndRef} />
         </div>

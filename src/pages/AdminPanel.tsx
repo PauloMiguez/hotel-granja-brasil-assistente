@@ -2,18 +2,18 @@ import React, { useState, useEffect, useCallback } from 'react';
 
 const WORKER_URL = 'https://intrega-ia.paulo-migueoli.workers.dev';
 
-interface Conversation {
-    id: string;
-    total_messages: number;
-    last_updated: string;
-    source: string;
-    messages: Message[];
+interface Message {
+  role: string;
+  content: string;
+  timestamp?: string;
 }
 
-interface Message {
-    role: string;
-    content: string;
-    timestamp?: string;
+interface Conversation {
+  id: string;
+  total_messages: number;
+  last_updated: string;
+  source: string;
+  messages?: Message[]; // opcional
 }
 
 interface TrackingStats {
@@ -136,22 +136,21 @@ export const AdminPanel: React.FC = () => {
         return docs.map((doc: any) => {
             const f = doc.fields || {};
             const id = f.conversation_id?.stringValue || doc.name?.split('/').pop() || 'N/A';
-            const msgsCount = Number(f.metadata?.mapValue?.fields?.total_messages?.integerValue) || 0;
-            const updated = f.metadata?.mapValue?.fields?.last_updated?.timestampValue || '';
+            const msgs = Number(f.metadata?.mapValue?.fields?.total_messages?.integerValue) || 0;
+            const updatedField = f.metadata?.mapValue?.fields?.last_updated;
+            let updated = '';
+            if (updatedField) {
+                if (updatedField.timestampValue) {
+                    updated = updatedField.timestampValue;
+                } else if (updatedField.stringValue) {
+                    updated = updatedField.stringValue;
+                } else {
+                    updated = updatedField.toString?.() || '';
+                }
+            }
+
             const source = f.metadata?.mapValue?.fields?.source?.stringValue || 'chat_web';
-
-            // 🔥 Extrai o array de mensagens salvo no documento do Firestore
-            const rawMessages = f.messages?.arrayValue?.values || f.historico?.arrayValue?.values || [];
-            const messages: Message[] = rawMessages.map((m: any) => {
-                const mf = m.mapValue?.fields || {};
-                return {
-                    role: mf.role?.stringValue || mf.sender?.stringValue || 'user',
-                    content: mf.content?.stringValue || mf.texto?.stringValue || mf.message?.stringValue || '',
-                    timestamp: mf.timestamp?.stringValue || mf.timestamp?.timestampValue || ''
-                };
-            }).filter((m: Message) => Boolean(m.content));
-
-            return { id, total_messages: msgsCount, last_updated: updated, source, messages };
+            return { id, total_messages: msgs, last_updated: updated, source };
         }).filter(c => c.id !== 'N/A');
     };
 
@@ -528,6 +527,7 @@ export const AdminPanel: React.FC = () => {
             </div>
 
             {/* Conversas */}
+            {/* Conversas */}
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden">
                 <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
@@ -537,21 +537,26 @@ export const AdminPanel: React.FC = () => {
                     <span>Origem</span>
                     <span>Ações</span>
                 </div>
-                {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => (
-                    <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
-                        <span className="font-mono text-xs text-[#1e293b] truncate" title={conv.id}>{conv.id.substring(0, 20)}...</span>
-                        <span>{conv.total_messages}</span>
-                        <span className="text-gray-600 text-xs">{new Date(conv.last_updated).toLocaleString('pt-BR')}</span>
-                        <span>{conv.source}</span>
-                        {/* 🔥 AÇÃO CONECTADA */}
-                        <button
-                            onClick={() => handleViewConversation(conv.id)}
-                            className="bg-[#1e293b] text-white px-3 py-1.5 rounded text-xs hover:bg-[#2d3a4f] transition-colors font-medium cursor-pointer w-fit"
-                        >
-                            Ver Conversa
-                        </button>
-                    </div>
-                ))}
+                {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => {
+                    const date = conv.last_updated ? new Date(conv.last_updated) : null;
+                    const formattedDate = date && !isNaN(date.getTime())
+                        ? date.toLocaleString('pt-BR')
+                        : 'Data não disponível';
+                    return (
+                        <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
+                            <span className="font-mono text-xs text-[#1e293b] truncate">{conv.id.substring(0, 20)}...</span>
+                            <span>{conv.total_messages}</span>
+                            <span className="text-gray-600 text-xs">{formattedDate}</span>
+                            <span>{conv.source}</span>
+                            <button
+                                onClick={() => handleViewConversation(conv.id)}
+                                className="bg-[#1e293b] text-white px-2 py-1 rounded text-xs hover:bg-[#2d3a4f]"
+                            >
+                                Ver Conversa
+                            </button>
+                        </div>
+                    );
+                })}
             </div>
 
             {filtered.length > pageSize && (
