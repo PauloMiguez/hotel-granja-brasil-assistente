@@ -30,7 +30,12 @@ export const ChatContainer: React.FC = () => {
       {/* Container principal – ocupa 100% da altura do pai */}
       <div className="flex flex-col h-full w-full bg-[#e5ddd5] overflow-hidden">
         {/* Cabeçalho – fixo no topo */}
-        
+        <div className="bg-[#075e54] text-white px-4 py-2.5 flex items-center justify-start flex-shrink-0 z-10">
+          <div className="flex items-center gap-1.5 text-sm">
+            <span className="w-2 h-2 bg-green-400 rounded-full inline-block animate-pulse"></span>
+            <span>Online</span>
+          </div>
+        </div>
 
         {/* Área de mensagens – única parte rolável */}
         <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2">
