@@ -8,11 +8,13 @@ export function validateGuests(adults: number, childrenCount: number, childAges:
   totalGuests: number;
   payingGuests: number;
 } {
+  // 🔥 CORREÇÃO: usa childAges para tudo, ignora childrenCount
+  const totalChildren = childAges.length;
   const payingChildren = childAges.filter(age => age > 6).length;
-  const totalChildren = childrenCount;
   const payingGuests = adults + payingChildren;
   const totalGuests = adults + totalChildren;
 
+  // REGRA 1: Hóspedes pagantes (adultos + crianças > 6) – máximo 3
   if (payingGuests > 3) {
     return {
       valid: false,
@@ -23,6 +25,7 @@ export function validateGuests(adults: number, childrenCount: number, childAges:
     };
   }
 
+  // REGRA 2: Total de pessoas na suíte – máximo 4
   if (totalGuests > 4) {
     return {
       valid: false,
@@ -33,6 +36,7 @@ export function validateGuests(adults: number, childrenCount: number, childAges:
     };
   }
 
+  // REGRA 3: Se houver crianças, deve haver pelo menos 1 adulto
   if (totalChildren > 0 && adults === 0) {
     return {
       valid: false,
