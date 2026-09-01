@@ -3,17 +3,17 @@ import React, { useState, useEffect, useCallback } from 'react';
 const WORKER_URL = 'https://intrega-ia.paulo-migueoli.workers.dev';
 
 interface Message {
-  role: string;
-  content: string;
-  timestamp?: string;
+    role: string;
+    content: string;
+    timestamp?: string;
 }
 
 interface Conversation {
-  id: string;
-  total_messages: number;
-  last_updated: string;
-  source: string;
-  messages?: Message[]; // opcional
+    id: string;
+    total_messages: number;
+    last_updated: string;
+    source: string;
+    messages?: Message[]; // opcional
 }
 
 interface TrackingStats {
@@ -77,20 +77,47 @@ export const AdminPanel: React.FC = () => {
     };
 
     // ========= BUSCAR DETALHES DE UMA CONVERSA (PARSER COMPLETO) =========
-    const handleViewConversation = (convId: string) => {
+    const handleViewConversation = async (convId: string) => {
         setSelectedConvId(convId);
         setLoadingConv(true);
 
-        // Procura a conversa dentro da lista que já foi baixada
+        // Procura a conversa no cache
         const conv = filtered.find(c => c.id === convId);
 
         if (conv && conv.messages && conv.messages.length > 0) {
             setConvMessages(conv.messages);
-        } else {
-            setConvMessages([]);
+            setLoadingConv(false);
+            return;
         }
 
-        setLoadingConv(false);
+        // Se não houver mensagens no cache, busca diretamente do Firestore
+        try {
+            const res = await fetch(`${WORKER_URL}/conversa?id=${encodeURIComponent(convId)}`);
+            const data = await res.json();
+            if (data.success && data.data) {
+                const doc = data.data;
+                const fields = doc.fields || {};
+                let messages: Message[] = [];
+                if (fields.messages?.arrayValue?.values) {
+                    messages = fields.messages.arrayValue.values.map((v: any) => {
+                        const mf = v.mapValue?.fields || {};
+                        return {
+                            role: mf.role?.stringValue || 'unknown',
+                            content: mf.content?.stringValue || '',
+                            timestamp: mf.timestamp?.timestampValue || '',
+                        };
+                    }).filter((m: Message) => Boolean(m.content));
+                }
+                setConvMessages(messages);
+            } else {
+                setConvMessages([]);
+            }
+        } catch (error) {
+            console.error('Erro ao buscar conversa:', error);
+            setConvMessages([]);
+        } finally {
+            setLoadingConv(false);
+        }
     };
 
     // ========= BUSCAR TRACKING =========
@@ -148,9 +175,22 @@ export const AdminPanel: React.FC = () => {
                     updated = updatedField.toString?.() || '';
                 }
             }
-
             const source = f.metadata?.mapValue?.fields?.source?.stringValue || 'chat_web';
-            return { id, total_messages: msgs, last_updated: updated, source };
+
+            // 🔥 EXTRAI MENSAGENS
+            let messages: Message[] = [];
+            if (f.messages?.arrayValue?.values) {
+                messages = f.messages.arrayValue.values.map((v: any) => {
+                    const mf = v.mapValue?.fields || {};
+                    return {
+                        role: mf.role?.stringValue || 'unknown',
+                        content: mf.content?.stringValue || '',
+                        timestamp: mf.timestamp?.timestampValue || '',
+                    };
+                }).filter((m: Message) => Boolean(m.content));
+            }
+
+            return { id, total_messages: msgs, last_updated: updated, source, messages };
         }).filter(c => c.id !== 'N/A');
     };
 
