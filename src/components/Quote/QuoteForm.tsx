@@ -181,14 +181,27 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
 
       const ratesData = await fetchHotelRates(formattedStart, formattedEnd);
 
+      // 🔍 LOG: Todos os quartos retornados pela API de tarifas
+      console.log('📦 Todos os quartos da API:', ratesData.data.dataFormatted.map(r => r.descricao));
+
       const availableRooms = ratesData.data.dataFormatted.filter(room => {
+        console.log(`🔍 Analisando quarto: ${room.descricao} (${room.codigo})`);
+
+        // Verifica disponibilidade para todas as datas
         const dates = getDatesBetween(startDate, endDate);
         const isAvailable = dates.every(date => {
           const roomData = adjustedAvailability.wsrolRS.disponibilidadeRS.disponibilidade.result[room.codigo];
+          const qty = roomData ? roomData.diaria[date] : 0;
+          console.log(`  📅 ${date}: quantidade=${qty}`);
           return roomData && roomData.diaria[date] > 0;
         });
-        if (!isAvailable) return false;
+        console.log(`  📊 Disponibilidade para todas as datas: ${isAvailable}`);
+        if (!isAvailable) {
+          console.log(`  ❌ Quarto ${room.codigo} removido: sem disponibilidade`);
+          return false;
+        }
 
+        // Verifica regras de capacidade
         const roomCheck = isRoomValidForGuests(
           room.descricao,
           adults,
@@ -196,8 +209,17 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
           guestValidation.totalGuests,
           guestValidation.payingGuests
         );
-        return roomCheck.valid;
+        console.log(`  📋 Regras de capacidade: valid=${roomCheck.valid}, reason=${roomCheck.reason || 'OK'}`);
+        if (!roomCheck.valid) {
+          console.log(`  ❌ Quarto ${room.codigo} removido: ${roomCheck.reason}`);
+          return false;
+        }
+
+        console.log(`  ✅ Quarto ${room.codigo} aprovado!`);
+        return true;
       });
+
+      console.log('📊 Quartos disponíveis após filtro:', availableRooms.map(r => r.descricao));
 
       if (availableRooms.length === 0) {
         setError('Não há acomodações disponíveis para o período selecionado com a configuração de hóspedes informada.');
