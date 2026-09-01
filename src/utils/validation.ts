@@ -1,14 +1,17 @@
 import { getDatesBetween, calculateNights } from './dateUtils';
 import { MINLOS_DATA } from '../services/minlosData';
 
-export function validateGuests(adults: number, childrenCount: number, childAges: number[]): {
+export function validateGuests(
+  adults: number,
+  _childrenCount: number, // mantido para compatibilidade, mas não usado
+  childAges: number[]
+): {
   valid: boolean;
   message?: string;
   payingChildren: number;
   totalGuests: number;
   payingGuests: number;
 } {
-  // 🔥 CORREÇÃO: usa childAges para tudo, ignora childrenCount
   const totalChildren = childAges.length;
   const payingChildren = childAges.filter(age => age > 6).length;
   const payingGuests = adults + payingChildren;

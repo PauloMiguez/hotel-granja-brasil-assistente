@@ -75,21 +75,19 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     }
   }, [state.cart, startDate, endDate, originalStartDate, originalEndDate]);
 
-  // Validação em tempo real (apenas para exibir avisos, não bloqueia)
+  // Validação em tempo real
   useEffect(() => {
     const childAges = hasChildren
       ? (childrenCount === 1 ? [childAge1] : [childAge1, childAge2])
       : [];
-    const validation = validateGuests(adults, childrenCount, childAges);
+    // 🔥 CORREÇÃO: passa 0 quando não há crianças
+    const validation = validateGuests(adults, hasChildren ? childrenCount : 0, childAges);
     if (!validation.valid) {
       setError(validation.message || 'Configuração de hóspedes inválida.');
     } else if (validation.message) {
       setError(validation.message);
-    } else {
-      // Não limpa o erro se ele já estiver definido (evita sumir mensagem de disponibilidade)
-      // Apenas se for um erro de validação, mas não temos como diferenciar facilmente,
-      // então deixamos a limpeza para o useEffect de mudança de datas.
     }
+    // não limpa erro se já definido (mantém mensagem de disponibilidade)
   }, [adults, hasChildren, childrenCount, childAge1, childAge2]);
 
   // Detecção de abandono
@@ -148,7 +146,8 @@ export const QuoteForm: React.FC<QuoteFormProps> = ({ onClose }) => {
     const childAges = hasChildren
       ? (childrenCount === 1 ? [childAge1] : [childAge1, childAge2])
       : [];
-    const guestValidation = validateGuests(adults, childrenCount, childAges);
+    // 🔥 CORREÇÃO: passa 0 quando não há crianças
+    const guestValidation = validateGuests(adults, hasChildren ? childrenCount : 0, childAges);
     if (!guestValidation.valid) {
       setError(guestValidation.message || 'Configuração de hóspedes inválida.');
       return;
