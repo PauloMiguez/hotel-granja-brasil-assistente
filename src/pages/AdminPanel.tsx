@@ -357,15 +357,28 @@ export const AdminPanel: React.FC = () => {
                     const parseDateInfo = (rawTimestamp: any) => {
                         if (!rawTimestamp) {
                             const now = new Date();
-                            return { dateStr: now.toISOString().split('T')[0], ms: now.getTime() };
+                            const year = now.getFullYear();
+                            const month = String(now.getMonth() + 1).padStart(2, '0');
+                            const day = String(now.getDate()).padStart(2, '0');
+                            return { dateStr: `${year}-${month}-${day}`, ms: now.getTime() };
                         }
+
                         const d = new Date(rawTimestamp);
                         if (isNaN(d.getTime())) {
                             const now = new Date();
-                            return { dateStr: now.toISOString().split('T')[0], ms: now.getTime() };
+                            const year = now.getFullYear();
+                            const month = String(now.getMonth() + 1).padStart(2, '0');
+                            const day = String(now.getDate()).padStart(2, '0');
+                            return { dateStr: `${year}-${month}-${day}`, ms: now.getTime() };
                         }
-                        return { dateStr: d.toISOString().split('T')[0], ms: d.getTime() };
-                    };
+
+                        // Obtém o ano, mês e dia no fuso horário local do navegador
+                        const year = d.getFullYear();
+                        const month = String(d.getMonth() + 1).padStart(2, '0');
+                        const day = String(d.getDate()).padStart(2, '0');
+
+                        return { dateStr: `${year}-${month}-${day}`, ms: d.getTime() };
+                    };  
 
                     const validEvents = trackingEvents.filter(
                         ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
