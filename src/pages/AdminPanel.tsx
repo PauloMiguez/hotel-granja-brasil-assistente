@@ -357,14 +357,14 @@ export const AdminPanel: React.FC = () => {
                     const parseDateInfo = (rawTimestamp: any) => {
                         if (!rawTimestamp) {
                             const now = new Date();
-                            return { dateStr: now.toLocaleDateString('sv-SE'), ms: now.getTime() };
+                            return { dateStr: now.toISOString().split('T')[0], ms: now.getTime() };
                         }
                         const d = new Date(rawTimestamp);
                         if (isNaN(d.getTime())) {
                             const now = new Date();
-                            return { dateStr: now.toLocaleDateString('sv-SE'), ms: now.getTime() };
+                            return { dateStr: now.toISOString().split('T')[0], ms: now.getTime() };
                         }
-                        return { dateStr: d.toLocaleDateString('sv-SE'), ms: d.getTime() };
+                        return { dateStr: d.toISOString().split('T')[0], ms: d.getTime() };
                     };
 
                     const validEvents = trackingEvents.filter(
