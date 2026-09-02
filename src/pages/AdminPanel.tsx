@@ -13,7 +13,7 @@ interface Conversation {
     total_messages: number;
     last_updated: string;
     source: string;
-    messages?: Message[]; // opcional
+    messages?: Message[];
 }
 
 interface TrackingStats {
@@ -28,10 +28,49 @@ interface TrackingStats {
 
 interface TrackingEvent {
     event: string;
-    timestamp: string;
+    timestamp: any;
     sessionId: string;
     data: any;
 }
+
+// 🛠️ HELPER PARSER DE DATAS (Trata Firestore SDK, REST API, strings e timestamps)
+const normalizeDate = (rawTimestamp: any): Date | null => {
+    if (!rawTimestamp) return null;
+
+    if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
+        const d = new Date(rawTimestamp);
+        return isNaN(d.getTime()) ? null : d;
+    }
+
+    if (rawTimestamp.timestampValue) {
+        const d = new Date(rawTimestamp.timestampValue);
+        return isNaN(d.getTime()) ? null : d;
+    }
+
+    const seconds = rawTimestamp._seconds ?? rawTimestamp.seconds;
+    if (seconds !== undefined) {
+        const d = new Date(seconds * 1000);
+        return isNaN(d.getTime()) ? null : d;
+    }
+
+    return null;
+};
+
+// 🛠️ EXTRAI YYYY-MM-DD NO FUSO DE BRASÍLIA
+const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } => {
+    const d = normalizeDate(rawTimestamp) || new Date();
+    
+    // Força formatação na timezone de Brasília (America/Sao_Paulo)
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    });
+
+    // en-CA retorna YYYY-MM-DD
+    return { dateStr: formatter.format(d), ms: d.getTime() };
+};
 
 export const AdminPanel: React.FC = () => {
     const [filtered, setFiltered] = useState<Conversation[]>([]);
@@ -46,21 +85,15 @@ export const AdminPanel: React.FC = () => {
     const [error, setError] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
 
-    // 🔥 ESTADOS PARA O MODAL DE VER CONVERSA
     const [selectedConvId, setSelectedConvId] = useState<string | null>(null);
     const [convMessages, setConvMessages] = useState<Message[]>([]);
     const [loadingConv, setLoadingConv] = useState(false);
 
-    // Filtro de data da jornada (Padrão: Hoje YYYY-MM-DD local)
+    // Filtro de data inicializado no fuso de Brasília
     const [selectedDate, setSelectedDate] = useState<string>(() => {
-        const today = new Date();
-        const year = today.getFullYear();
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        const day = String(today.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
+        return getBrasiliaDateStr(new Date()).dateStr;
     });
 
-    // ========= BUSCAR CONVERSAS =========
     const fetchConversations = async () => {
         try {
             const res = await fetch(`${WORKER_URL}/conversas`);
@@ -76,12 +109,10 @@ export const AdminPanel: React.FC = () => {
         }
     };
 
-    // ========= BUSCAR DETALHES DE UMA CONVERSA (PARSER COMPLETO) =========
     const handleViewConversation = async (convId: string) => {
         setSelectedConvId(convId);
         setLoadingConv(true);
 
-        // Procura a conversa no cache
         const conv = filtered.find(c => c.id === convId);
 
         if (conv && conv.messages && conv.messages.length > 0) {
@@ -90,7 +121,6 @@ export const AdminPanel: React.FC = () => {
             return;
         }
 
-        // Se não houver mensagens no cache, busca diretamente do Firestore
         try {
             const res = await fetch(`${WORKER_URL}/conversa?id=${encodeURIComponent(convId)}`);
             const data = await res.json();
@@ -120,7 +150,6 @@ export const AdminPanel: React.FC = () => {
         }
     };
 
-    // ========= BUSCAR TRACKING =========
     const fetchTrackingStats = useCallback(async () => {
         try {
             const res = await fetch(`${WORKER_URL}/tracking-stats`);
@@ -177,7 +206,6 @@ export const AdminPanel: React.FC = () => {
             }
             const source = f.metadata?.mapValue?.fields?.source?.stringValue || 'chat_web';
 
-            // 🔥 EXTRAI MENSAGENS
             let messages: Message[] = [];
             if (f.messages?.arrayValue?.values) {
                 messages = f.messages.arrayValue.values.map((v: any) => {
@@ -197,8 +225,8 @@ export const AdminPanel: React.FC = () => {
     const updateStats = (convs: Conversation[]) => {
         const total = convs.length;
         const msgs = convs.reduce((s, c) => s + (Number(c.total_messages) || 0), 0);
-        const today = new Date().toISOString().split('T')[0];
-        const todayConvs = convs.filter(c => c.last_updated && c.last_updated.includes(today)).length;
+        const todayStr = getBrasiliaDateStr(new Date()).dateStr;
+        const todayConvs = convs.filter(c => c.last_updated && c.last_updated.includes(todayStr)).length;
         setStats({ total, msgs, today: todayConvs, avg: total > 0 ? msgs / total : 0 });
     };
 
@@ -242,9 +270,9 @@ export const AdminPanel: React.FC = () => {
     };
 
     const exportCSV = () => {
-        const headers = ['Sessão', 'Evento', 'Timestamp', 'Detalhes'];
+        const headers = ['Sessao', 'Evento', 'Timestamp', 'Detalhes'];
         const rows = trackingEvents
-            .filter(ev => ev.event !== 'teste_final' && ev.event !== 'diagnostico' && ev.event !== 'teste')
+            .filter(ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event))
             .map(ev => {
                 let detail = '';
                 if (ev.event === 'consulta_iniciada' && ev.data) {
@@ -257,9 +285,21 @@ export const AdminPanel: React.FC = () => {
                 } else if (ev.data?.context) {
                     detail = ev.data.context;
                 }
-                return [ev.sessionId, ev.event, new Date(ev.timestamp).toLocaleString('pt-BR'), detail];
+
+                const parsedDate = normalizeDate(ev.timestamp);
+                const dateFormatted = parsedDate 
+                    ? parsedDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) 
+                    : 'Data Indisponivel';
+
+                return [
+                    ev.sessionId,
+                    ev.event,
+                    dateFormatted,
+                    `"${detail.replace(/"/g, '""')}"`
+                ];
             });
-        const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+
+        const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
@@ -354,32 +394,6 @@ export const AdminPanel: React.FC = () => {
                         { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
                     ];
 
-                    const parseDateInfo = (rawTimestamp: any) => {
-                        if (!rawTimestamp) {
-                            const now = new Date();
-                            const year = now.getFullYear();
-                            const month = String(now.getMonth() + 1).padStart(2, '0');
-                            const day = String(now.getDate()).padStart(2, '0');
-                            return { dateStr: `${year}-${month}-${day}`, ms: now.getTime() };
-                        }
-
-                        const d = new Date(rawTimestamp);
-                        if (isNaN(d.getTime())) {
-                            const now = new Date();
-                            const year = now.getFullYear();
-                            const month = String(now.getMonth() + 1).padStart(2, '0');
-                            const day = String(now.getDate()).padStart(2, '0');
-                            return { dateStr: `${year}-${month}-${day}`, ms: now.getTime() };
-                        }
-
-                        // Obtém o ano, mês e dia no fuso horário local do navegador
-                        const year = d.getFullYear();
-                        const month = String(d.getMonth() + 1).padStart(2, '0');
-                        const day = String(d.getDate()).padStart(2, '0');
-
-                        return { dateStr: `${year}-${month}-${day}`, ms: d.getTime() };
-                    };  
-
                     const validEvents = trackingEvents.filter(
                         ev => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
                     );
@@ -391,13 +405,13 @@ export const AdminPanel: React.FC = () => {
                     });
 
                     Object.keys(sessionsMap).forEach(sId => {
-                        sessionsMap[sId].sort((a, b) => parseDateInfo(a.timestamp).ms - parseDateInfo(b.timestamp).ms);
+                        sessionsMap[sId].sort((a, b) => getBrasiliaDateStr(a.timestamp).ms - getBrasiliaDateStr(b.timestamp).ms);
                     });
 
                     const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
                         const lastEvent = events[events.length - 1];
-                        const { ms } = parseDateInfo(lastEvent?.timestamp);
-                        const sessionDates = events.map(e => parseDateInfo(e.timestamp).dateStr);
+                        const { ms } = getBrasiliaDateStr(lastEvent?.timestamp);
+                        const sessionDates = events.map(e => getBrasiliaDateStr(e.timestamp).dateStr);
 
                         return {
                             sessionId,
@@ -467,7 +481,10 @@ export const AdminPanel: React.FC = () => {
                                     }
 
                                     const lastEvent = events[events.length - 1];
-                                    const lastTimeStr = lastEvent?.timestamp ? new Date(lastEvent.timestamp).toLocaleString('pt-BR') : '';
+                                    const parsedLastDate = normalizeDate(lastEvent?.timestamp);
+                                    const lastTimeStr = parsedLastDate 
+                                        ? parsedLastDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) 
+                                        : '';
 
                                     const consulta = events.find(e => e.event === 'consulta_iniciada');
                                     const d = consulta?.data;
@@ -529,7 +546,10 @@ export const AdminPanel: React.FC = () => {
 
                                             <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2">
                                                 {events.map((ev, idx) => {
-                                                    const eventTime = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+                                                    const parsedEvDate = normalizeDate(ev.timestamp);
+                                                    const eventTime = parsedEvDate 
+                                                        ? parsedEvDate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }) 
+                                                        : '';
 
                                                     let detail = '';
                                                     switch (ev.event) {
@@ -580,7 +600,6 @@ export const AdminPanel: React.FC = () => {
             </div>
 
             {/* Conversas */}
-            {/* Conversas */}
             <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
             <div className="bg-white rounded-lg shadow overflow-hidden">
                 <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
@@ -591,9 +610,9 @@ export const AdminPanel: React.FC = () => {
                     <span>Ações</span>
                 </div>
                 {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => {
-                    const date = conv.last_updated ? new Date(conv.last_updated) : null;
-                    const formattedDate = date && !isNaN(date.getTime())
-                        ? date.toLocaleString('pt-BR')
+                    const parsedConvDate = normalizeDate(conv.last_updated);
+                    const formattedDate = parsedConvDate
+                        ? parsedConvDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
                         : 'Data não disponível';
                     return (
                         <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
@@ -620,11 +639,10 @@ export const AdminPanel: React.FC = () => {
                 </div>
             )}
 
-            {/* 🔥 MODAL PARA VISUALIZAÇÃO DAS MENSAGENS */}
+            {/* MODAL PARA VISUALIZAÇÃO DAS MENSAGENS */}
             {selectedConvId && (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                     <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden border border-slate-100">
-                        {/* Cabeçalho do Modal */}
                         <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
                             <div>
                                 <h3 className="font-semibold text-sm">Conversa Detalhada</h3>
@@ -638,7 +656,6 @@ export const AdminPanel: React.FC = () => {
                             </button>
                         </div>
 
-                        {/* Conteúdo das Mensagens */}
                         <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-slate-50 min-h-[300px]">
                             {loadingConv ? (
                                 <div className="flex justify-center items-center h-48 text-slate-500 text-sm">
@@ -651,6 +668,7 @@ export const AdminPanel: React.FC = () => {
                             ) : (
                                 convMessages.map((msg, idx) => {
                                     const isUser = msg.role === 'user' || msg.role === 'cliente';
+                                    const parsedMsgDate = normalizeDate(msg.timestamp);
                                     return (
                                         <div
                                             key={idx}
@@ -667,9 +685,9 @@ export const AdminPanel: React.FC = () => {
                                                 </div>
                                                 <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
                                             </div>
-                                            {msg.timestamp && (
+                                            {parsedMsgDate && (
                                                 <span className="text-[10px] text-slate-400 mt-1 px-1">
-                                                    {new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                    {parsedMsgDate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })}
                                                 </span>
                                             )}
                                         </div>
@@ -678,7 +696,6 @@ export const AdminPanel: React.FC = () => {
                             )}
                         </div>
 
-                        {/* Rodapé do Modal */}
                         <div className="p-3 bg-white border-t border-slate-100 flex justify-end">
                             <button
                                 onClick={() => setSelectedConvId(null)}
