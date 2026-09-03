@@ -38,28 +38,42 @@ interface TrackingEvent {
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp) return null;
 
-  if (rawTimestamp instanceof Date) {
-    return isNaN(rawTimestamp.getTime()) ? null : rawTimestamp;
-  }
-
-  // Desembala envelopes de objetos REST do Firestore
-  if (typeof rawTimestamp === 'object') {
-    if (rawTimestamp.timestampValue) {
-      return normalizeDate(rawTimestamp.timestampValue);
-    }
-    if (rawTimestamp.stringValue) {
-      return normalizeDate(rawTimestamp.stringValue);
-    }
-    const seconds = rawTimestamp._seconds ?? rawTimestamp.seconds;
-    if (seconds !== undefined) {
-      const d = new Date(seconds * 1000);
-      return isNaN(d.getTime()) ? null : d;
-    }
-  }
-
+  // 1. String ISO ou timestamp numérico
   if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
     const d = new Date(rawTimestamp);
     if (!isNaN(d.getTime())) return d;
+    // Se for string numérica, tenta parsear como número
+    if (typeof rawTimestamp === 'string') {
+      const num = parseFloat(rawTimestamp);
+      if (!isNaN(num)) {
+        const d2 = new Date(num);
+        if (!isNaN(d2.getTime())) return d2;
+      }
+    }
+    return null;
+  }
+
+  // 2. Objeto com timestampValue (Firestore REST)
+  if (rawTimestamp.timestampValue) {
+    const d = new Date(rawTimestamp.timestampValue);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 3. Objeto com _seconds (Firestore SDK)
+  if (rawTimestamp._seconds !== undefined) {
+    const d = new Date(rawTimestamp._seconds * 1000);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 4. Objeto com seconds (Firestore SDK alternativo)
+  if (rawTimestamp.seconds !== undefined) {
+    const d = new Date(rawTimestamp.seconds * 1000);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 5. Objeto Date nativo
+  if (rawTimestamp instanceof Date) {
+    return rawTimestamp;
   }
 
   return null;
@@ -69,43 +83,27 @@ const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } 
   const d = normalizeDate(rawTimestamp);
   if (!d) return null;
 
-  const formatter = new Intl.DateTimeFormat('en-CA', {
+  // Não dependa do formato textual de `en-CA`: alguns ambientes podem
+  // devolver DD/MM/YYYY ou MM/DD/YYYY. FormatToParts elimina essa ambiguidade.
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  });
+  }).formatToParts(d);
 
-  return { dateStr: formatter.format(d), ms: d.getTime() };
-};
+  const values = Object.fromEntries(
+    parts
+      .filter(({ type }) => type !== 'literal')
+      .map(({ type, value }) => [type, value]),
+  );
 
-// Parser robusto para desembaraçar a estrutura do Firestore REST/SDK
-const parseTrackingEvents = (rawEvents: any[]): TrackingEvent[] => {
-  if (!Array.isArray(rawEvents)) return [];
+  if (!values.year || !values.month || !values.day) return null;
 
-  return rawEvents.map((ev) => {
-    const fields = ev.fields || {};
-
-    const event = ev.event || fields.event?.stringValue || 'evento_desconhecido';
-    const sessionId = ev.sessionId || fields.sessionId?.stringValue || fields.session_id?.stringValue || 'sessao_desconhecida';
-
-    let data = ev.data;
-    if (!data && fields.data?.mapValue?.fields) {
-      data = {};
-      Object.keys(fields.data.mapValue.fields).forEach((key) => {
-        const val = fields.data.mapValue.fields[key];
-        data[key] = val.stringValue || val.integerValue || val.booleanValue || val;
-      });
-    }
-
-    const timestamp =
-      ev.timestamp ||
-      fields.timestamp?.timestampValue ||
-      fields.timestamp?.stringValue ||
-      fields.timestamp;
-
-    return { event, sessionId, data: data || {}, timestamp };
-  });
+  return {
+    dateStr: `${values.year}-${values.month}-${values.day}`,
+    ms: d.getTime(),
+  };
 };
 
 export const AdminPanel: React.FC = () => {
@@ -131,6 +129,7 @@ export const AdminPanel: React.FC = () => {
   const [convMessages, setConvMessages] = useState<Message[]>([]);
   const [loadingConv, setLoadingConv] = useState(false);
 
+  // Inicializa o filtro com a data de hoje no fuso de Brasília
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = getBrasiliaDateStr(new Date());
     return today ? today.dateStr : new Date().toISOString().split('T')[0];
@@ -178,7 +177,7 @@ export const AdminPanel: React.FC = () => {
               return {
                 role: mf.role?.stringValue || 'unknown',
                 content: mf.content?.stringValue || '',
-                timestamp: mf.timestamp?.timestampValue || mf.timestamp?.stringValue || '',
+                timestamp: mf.timestamp?.timestampValue || '',
               };
             })
             .filter((m: Message) => Boolean(m.content));
@@ -202,30 +201,37 @@ export const AdminPanel: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.events) {
-          const parsed = parseTrackingEvents(data.events);
-          setTrackingStats(data.stats || {
-            consultas: 0, sucesso: 0, vazias: 0, carrinho: 0, orcamento: 0, whatsapp: 0, abandono: 0
-          });
-          setTrackingEvents(parsed);
+          const currentStr = JSON.stringify(trackingEvents);
+          const newStr = JSON.stringify(data.events);
+          if (currentStr !== newStr) {
+            setTrackingStats(data.stats);
+            setTrackingEvents(data.events);
+          }
           return;
         }
       }
       const localData = getLocalTrackingStats();
       if (localData) {
-        const parsed = parseTrackingEvents(localData.events);
-        setTrackingStats(localData.stats);
-        setTrackingEvents(parsed);
+        const currentStr = JSON.stringify(trackingEvents);
+        const newStr = JSON.stringify(localData.events);
+        if (currentStr !== newStr) {
+          setTrackingStats(localData.stats);
+          setTrackingEvents(localData.events);
+        }
       }
     } catch (e) {
       console.warn('Erro ao buscar tracking do servidor:', e);
       const localData = getLocalTrackingStats();
       if (localData) {
-        const parsed = parseTrackingEvents(localData.events);
-        setTrackingStats(localData.stats);
-        setTrackingEvents(parsed);
+        const currentStr = JSON.stringify(trackingEvents);
+        const newStr = JSON.stringify(localData.events);
+        if (currentStr !== newStr) {
+          setTrackingStats(localData.stats);
+          setTrackingEvents(localData.events);
+        }
       }
     }
-  }, []);
+  }, [trackingEvents]);
 
   const parseConversations = (docs: any[]): Conversation[] => {
     return docs
@@ -254,7 +260,7 @@ export const AdminPanel: React.FC = () => {
               return {
                 role: mf.role?.stringValue || 'unknown',
                 content: mf.content?.stringValue || '',
-                timestamp: mf.timestamp?.timestampValue || mf.timestamp?.stringValue || '',
+                timestamp: mf.timestamp?.timestampValue || '',
               };
             })
             .filter((m: Message) => Boolean(m.content));
@@ -268,13 +274,9 @@ export const AdminPanel: React.FC = () => {
   const updateStats = (convs: Conversation[]) => {
     const total = convs.length;
     const msgs = convs.reduce((s, c) => s + (Number(c.total_messages) || 0), 0);
-    const todayStr = getBrasiliaDateStr(new Date())?.dateStr;
-
-    const todayConvs = convs.filter((c) => {
-      const convDate = getBrasiliaDateStr(c.last_updated);
-      return convDate && convDate.dateStr === todayStr;
-    }).length;
-
+    const todayStr = getBrasiliaDateStr(new Date());
+    const today = todayStr ? todayStr.dateStr : new Date().toISOString().split('T')[0];
+    const todayConvs = convs.filter((c) => getBrasiliaDateStr(c.last_updated)?.dateStr === today).length;
     setStats({ total, msgs, today: todayConvs, avg: total > 0 ? msgs / total : 0 });
   };
 
@@ -331,7 +333,7 @@ export const AdminPanel: React.FC = () => {
       setLoading(false);
     };
     loadData();
-  }, [fetchTrackingStats]);
+  }, []);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -467,38 +469,39 @@ export const AdminPanel: React.FC = () => {
             (ev) => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
           );
 
+          // Agrupa por sessão, descartando eventos com data inválida
           const sessionsMap: Record<string, typeof trackingEvents> = {};
           validEvents.forEach((ev) => {
+            const dateInfo = getBrasiliaDateStr(ev.timestamp);
+            if (!dateInfo) return; // pula eventos sem data válida
             if (!sessionsMap[ev.sessionId]) sessionsMap[ev.sessionId] = [];
             sessionsMap[ev.sessionId].push(ev);
           });
 
           Object.keys(sessionsMap).forEach((sId) => {
-            sessionsMap[sId].sort((a, b) => {
-              const msA = getBrasiliaDateStr(a.timestamp)?.ms || 0;
-              const msB = getBrasiliaDateStr(b.timestamp)?.ms || 0;
-              return msA - msB;
-            });
+            sessionsMap[sId].sort(
+              (a, b) => (getBrasiliaDateStr(a.timestamp)?.ms || 0) - (getBrasiliaDateStr(b.timestamp)?.ms || 0)
+            );
           });
 
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
             const lastEvent = events[events.length - 1];
             const lastDate = getBrasiliaDateStr(lastEvent?.timestamp);
-            const sessionDates = events
-              .map((e) => getBrasiliaDateStr(e.timestamp)?.dateStr)
-              .filter(Boolean) as string[];
-
             return {
               sessionId,
               events,
               lastTimestampMs: lastDate?.ms || 0,
-              allDates: sessionDates,
             };
           });
 
+          // A sessão pertence ao dia se qualquer evento ocorreu nesse dia em
+          // horário de Brasília. O timestamp do Firestore vem em UTC (ISO, com Z),
+          // portanto a conversão precisa acontecer antes da comparação.
           const filteredSessions = allSessions.filter((session) => {
             if (!selectedDate) return true;
-            return session.allDates.includes(selectedDate);
+            return session.events.some(
+              (event) => getBrasiliaDateStr(event.timestamp)?.dateStr === selectedDate,
+            );
           });
 
           const sortedSessions = filteredSessions.sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
