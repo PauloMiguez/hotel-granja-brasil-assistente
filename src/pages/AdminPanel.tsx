@@ -33,53 +33,38 @@ interface TrackingEvent {
   data: any;
 }
 
-// ========= FUNÇÃO DE NORMALIZAÇÃO DE DATA (ROBUSTA) =========
+// ========= FUNÇÕES DE NORMALIZAÇÃO DE DATA =========
+
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp) return null;
 
-  // 1. String ISO ou número
+  // 1. Instância nativa de Date
+  if (rawTimestamp instanceof Date) {
+    return isNaN(rawTimestamp.getTime()) ? null : rawTimestamp;
+  }
+
+  // 2. Extração de envelopes Firestore REST/SDK se fornecidos diretamente
+  if (typeof rawTimestamp === 'object') {
+    if (rawTimestamp.timestampValue) {
+      return normalizeDate(rawTimestamp.timestampValue);
+    }
+    if (rawTimestamp.stringValue) {
+      return normalizeDate(rawTimestamp.stringValue);
+    }
+    const seconds = rawTimestamp._seconds ?? rawTimestamp.seconds;
+    if (seconds !== undefined) {
+      const d = new Date(seconds * 1000);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    if (rawTimestamp.fields) {
+      return normalizeDate(rawTimestamp.fields.timestamp || rawTimestamp.fields.last_updated);
+    }
+  }
+
+  // 3. String ISO ou números
   if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
     const d = new Date(rawTimestamp);
     if (!isNaN(d.getTime())) return d;
-    if (typeof rawTimestamp === 'string') {
-      const num = parseFloat(rawTimestamp);
-      if (!isNaN(num)) {
-        const d2 = new Date(num);
-        if (!isNaN(d2.getTime())) return d2;
-      }
-    }
-    return null;
-  }
-
-  // 2. timestampValue (Firestore REST)
-  if (rawTimestamp.timestampValue) {
-    const d = new Date(rawTimestamp.timestampValue);
-    if (!isNaN(d.getTime())) return d;
-  }
-
-  // 3. _seconds (Firestore SDK)
-  if (rawTimestamp._seconds !== undefined) {
-    const d = new Date(rawTimestamp._seconds * 1000);
-    if (!isNaN(d.getTime())) return d;
-  }
-
-  // 4. seconds (Firestore SDK alternativo)
-  if (rawTimestamp.seconds !== undefined) {
-    const d = new Date(rawTimestamp.seconds * 1000);
-    if (!isNaN(d.getTime())) return d;
-  }
-
-  // 5. Date nativo
-  if (rawTimestamp instanceof Date) {
-    return rawTimestamp;
-  }
-
-  // 6. Fallback: tenta converter para string
-  try {
-    const d = new Date(String(rawTimestamp));
-    if (!isNaN(d.getTime())) return d;
-  } catch (e) {
-    // ignora
   }
 
   return null;
@@ -88,13 +73,44 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
 const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } | null => {
   const d = normalizeDate(rawTimestamp);
   if (!d) return null;
+
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   });
+
   return { dateStr: formatter.format(d), ms: d.getTime() };
+};
+
+// Parser para higienizar dados vindos da API REST do Firestore ou do Worker
+const parseTrackingEvents = (rawEvents: any[]): TrackingEvent[] => {
+  if (!Array.isArray(rawEvents)) return [];
+
+  return rawEvents.map((ev) => {
+    const fields = ev.fields || {};
+
+    const event = ev.event || fields.event?.stringValue || 'evento_desconhecido';
+    const sessionId = ev.sessionId || fields.sessionId?.stringValue || 'sessao_desconhecida';
+
+    let data = ev.data;
+    if (!data && fields.data?.mapValue?.fields) {
+      data = {};
+      Object.keys(fields.data.mapValue.fields).forEach((key) => {
+        const val = fields.data.mapValue.fields[key];
+        data[key] = val.stringValue || val.integerValue || val.booleanValue || val;
+      });
+    }
+
+    const timestamp =
+      ev.timestamp ||
+      fields.timestamp?.timestampValue ||
+      fields.timestamp?.stringValue ||
+      fields.timestamp;
+
+    return { event, sessionId, data, timestamp };
+  });
 };
 
 export const AdminPanel: React.FC = () => {
@@ -120,11 +136,13 @@ export const AdminPanel: React.FC = () => {
   const [convMessages, setConvMessages] = useState<Message[]>([]);
   const [loadingConv, setLoadingConv] = useState(false);
 
+  // Filtro inicializado com o dia de hoje no fuso horário de Brasília
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = getBrasiliaDateStr(new Date());
     return today ? today.dateStr : new Date().toISOString().split('T')[0];
   });
 
+  // ========= BUSCAR CONVERSAS =========
   const fetchConversations = async () => {
     try {
       const res = await fetch(`${WORKER_URL}/conversas`);
@@ -140,6 +158,7 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
+  // ========= BUSCAR DETALHES DE CONVERSA =========
   const handleViewConversation = async (convId: string) => {
     setSelectedConvId(convId);
     setLoadingConv(true);
@@ -165,7 +184,7 @@ export const AdminPanel: React.FC = () => {
               return {
                 role: mf.role?.stringValue || 'unknown',
                 content: mf.content?.stringValue || '',
-                timestamp: mf.timestamp?.timestampValue || '',
+                timestamp: mf.timestamp?.timestampValue || mf.timestamp?.stringValue || '',
               };
             })
             .filter((m: Message) => Boolean(m.content));
@@ -182,43 +201,35 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
+  // ========= BUSCAR TRACKING =========
   const fetchTrackingStats = useCallback(async () => {
     try {
       const res = await fetch(`${WORKER_URL}/tracking-stats`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.events) {
-          const currentStr = JSON.stringify(trackingEvents);
-          const newStr = JSON.stringify(data.events);
-          if (currentStr !== newStr) {
-            setTrackingStats(data.stats);
-            setTrackingEvents(data.events);
-          }
+          const parsed = parseTrackingEvents(data.events);
+          setTrackingStats(data.stats);
+          setTrackingEvents(parsed);
           return;
         }
       }
       const localData = getLocalTrackingStats();
       if (localData) {
-        const currentStr = JSON.stringify(trackingEvents);
-        const newStr = JSON.stringify(localData.events);
-        if (currentStr !== newStr) {
-          setTrackingStats(localData.stats);
-          setTrackingEvents(localData.events);
-        }
+        const parsed = parseTrackingEvents(localData.events);
+        setTrackingStats(localData.stats);
+        setTrackingEvents(parsed);
       }
     } catch (e) {
       console.warn('Erro ao buscar tracking do servidor:', e);
       const localData = getLocalTrackingStats();
       if (localData) {
-        const currentStr = JSON.stringify(trackingEvents);
-        const newStr = JSON.stringify(localData.events);
-        if (currentStr !== newStr) {
-          setTrackingStats(localData.stats);
-          setTrackingEvents(localData.events);
-        }
+        const parsed = parseTrackingEvents(localData.events);
+        setTrackingStats(localData.stats);
+        setTrackingEvents(parsed);
       }
     }
-  }, [trackingEvents]);
+  }, []);
 
   const parseConversations = (docs: any[]): Conversation[] => {
     return docs
@@ -247,7 +258,7 @@ export const AdminPanel: React.FC = () => {
               return {
                 role: mf.role?.stringValue || 'unknown',
                 content: mf.content?.stringValue || '',
-                timestamp: mf.timestamp?.timestampValue || '',
+                timestamp: mf.timestamp?.timestampValue || mf.timestamp?.stringValue || '',
               };
             })
             .filter((m: Message) => Boolean(m.content));
@@ -261,8 +272,13 @@ export const AdminPanel: React.FC = () => {
   const updateStats = (convs: Conversation[]) => {
     const total = convs.length;
     const msgs = convs.reduce((s, c) => s + (Number(c.total_messages) || 0), 0);
-    const todayStr = getBrasiliaDateStr(new Date())?.dateStr || new Date().toISOString().split('T')[0];
-    const todayConvs = convs.filter((c) => c.last_updated && c.last_updated.includes(todayStr)).length;
+    const todayStr = getBrasiliaDateStr(new Date())?.dateStr;
+
+    const todayConvs = convs.filter((c) => {
+      const convDate = getBrasiliaDateStr(c.last_updated);
+      return convDate && convDate.dateStr === todayStr;
+    }).length;
+
     setStats({ total, msgs, today: todayConvs, avg: total > 0 ? msgs / total : 0 });
   };
 
@@ -319,7 +335,7 @@ export const AdminPanel: React.FC = () => {
       setLoading(false);
     };
     loadData();
-  }, []);
+  }, [fetchTrackingStats]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -455,44 +471,38 @@ export const AdminPanel: React.FC = () => {
             (ev) => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
           );
 
-          // 🔥 AGRUPAR POR SESSÃO (com data de criação)
           const sessionsMap: Record<string, typeof trackingEvents> = {};
           validEvents.forEach((ev) => {
+            const dateInfo = getBrasiliaDateStr(ev.timestamp);
+            if (!dateInfo) return;
             if (!sessionsMap[ev.sessionId]) sessionsMap[ev.sessionId] = [];
             sessionsMap[ev.sessionId].push(ev);
           });
 
-          const allSessions = Object.entries(sessionsMap)
-            .map(([sessionId, events]) => {
-              // Ordena por data (mais antigo primeiro)
-              events.sort(
-                (a, b) => (getBrasiliaDateStr(a.timestamp)?.ms || 0) - (getBrasiliaDateStr(b.timestamp)?.ms || 0)
-              );
+          Object.keys(sessionsMap).forEach((sId) => {
+            sessionsMap[sId].sort(
+              (a, b) => (getBrasiliaDateStr(a.timestamp)?.ms || 0) - (getBrasiliaDateStr(b.timestamp)?.ms || 0)
+            );
+          });
 
-              // Data de criação = data do primeiro evento
-              const firstEvent = events[0];
-              const firstDateInfo = getBrasiliaDateStr(firstEvent?.timestamp);
-              const sessionDate = firstDateInfo ? firstDateInfo.dateStr : null;
+          const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
+            const lastEvent = events[events.length - 1];
+            const lastDate = getBrasiliaDateStr(lastEvent?.timestamp);
+            const sessionDates = events
+              .map((e) => getBrasiliaDateStr(e.timestamp)?.dateStr)
+              .filter(Boolean) as string[];
 
-              // Fallback: se não tiver data, usa a data atual
-              const fallbackDate = sessionDate || getBrasiliaDateStr(new Date())?.dateStr || null;
+            return {
+              sessionId,
+              events,
+              lastTimestampMs: lastDate?.ms || 0,
+              allDates: sessionDates,
+            };
+          });
 
-              const lastEvent = events[events.length - 1];
-              const lastDate = getBrasiliaDateStr(lastEvent?.timestamp);
-
-              return {
-                sessionId,
-                events,
-                sessionDate: sessionDate || fallbackDate, // sempre tem data
-                lastTimestampMs: lastDate?.ms || 0,
-              };
-            })
-            .filter((session) => session.sessionDate !== null);
-
-          // 🔥 FILTRO POR DATA
           const filteredSessions = allSessions.filter((session) => {
             if (!selectedDate) return true;
-            return session.sessionDate === selectedDate;
+            return session.allDates.includes(selectedDate);
           });
 
           const sortedSessions = filteredSessions.sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
