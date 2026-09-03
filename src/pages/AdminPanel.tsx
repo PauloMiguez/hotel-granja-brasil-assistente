@@ -79,6 +79,26 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
   return null;
 };
 
+const getEventDateInfo = (event: TrackingEvent): { dateStr: string; ms: number } | null => {
+  // Fonte principal: timestamp persistido no evento.
+  const direct = getBrasiliaDateStr(event.timestamp);
+  if (direct) return direct;
+
+  // Fallback: alguns registros do endpoint chegam com timestamp vazio, mas o
+  // sessionId preserva o epoch usado na criação da sessão.
+  const sessionEpoch = event.sessionId?.match(/^session_(\d{10,})/i)?.[1];
+  if (sessionEpoch) return getBrasiliaDateStr(Number(sessionEpoch));
+
+  return null;
+};
+
+const getConfiguredDates = (event: TrackingEvent): string[] => {
+  const dates = [event.data?.checkin, event.data?.checkout];
+  return dates.filter((value): value is string =>
+    typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value),
+  );
+};
+
 const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } | null => {
   const d = normalizeDate(rawTimestamp);
   if (!d) return null;
@@ -469,24 +489,24 @@ export const AdminPanel: React.FC = () => {
             (ev) => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
           );
 
-          // Agrupa por sessão, descartando eventos com data inválida
+          // Agrupa por sessão mesmo quando o endpoint retorna timestamp vazio.
+          // A data poderá vir do timestamp, do epoch no sessionId ou de check-in/check-out.
           const sessionsMap: Record<string, typeof trackingEvents> = {};
           validEvents.forEach((ev) => {
-            const dateInfo = getBrasiliaDateStr(ev.timestamp);
-            if (!dateInfo) return; // pula eventos sem data válida
-            if (!sessionsMap[ev.sessionId]) sessionsMap[ev.sessionId] = [];
-            sessionsMap[ev.sessionId].push(ev);
+            const sessionId = ev.sessionId || 'sessao-sem-id';
+            if (!sessionsMap[sessionId]) sessionsMap[sessionId] = [];
+            sessionsMap[sessionId].push(ev);
           });
 
           Object.keys(sessionsMap).forEach((sId) => {
             sessionsMap[sId].sort(
-              (a, b) => (getBrasiliaDateStr(a.timestamp)?.ms || 0) - (getBrasiliaDateStr(b.timestamp)?.ms || 0)
+              (a, b) => (getEventDateInfo(a)?.ms || 0) - (getEventDateInfo(b)?.ms || 0)
             );
           });
 
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
             const lastEvent = events[events.length - 1];
-            const lastDate = getBrasiliaDateStr(lastEvent?.timestamp);
+            const lastDate = lastEvent ? getEventDateInfo(lastEvent) : null;
             return {
               sessionId,
               events,
@@ -494,13 +514,13 @@ export const AdminPanel: React.FC = () => {
             };
           });
 
-          // A sessão pertence ao dia se qualquer evento ocorreu nesse dia em
-          // horário de Brasília. O timestamp do Firestore vem em UTC (ISO, com Z),
-          // portanto a conversão precisa acontecer antes da comparação.
+          // O filtro aceita a data do evento e também as datas configuradas na
+          // consulta. Isso mantém a jornada visível mesmo quando timestamp chega vazio.
           const filteredSessions = allSessions.filter((session) => {
             if (!selectedDate) return true;
-            return session.events.some(
-              (event) => getBrasiliaDateStr(event.timestamp)?.dateStr === selectedDate,
+            return session.events.some((event) =>
+              getEventDateInfo(event)?.dateStr === selectedDate ||
+              getConfiguredDates(event).includes(selectedDate),
             );
           });
 
@@ -859,3 +879,4 @@ const TrackingCard: React.FC<{ label: string; value: number; color?: string }> =
     </div>
   );
 };
+
