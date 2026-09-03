@@ -38,12 +38,11 @@ interface TrackingEvent {
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp) return null;
 
-  // 1. Instância nativa de Date
   if (rawTimestamp instanceof Date) {
     return isNaN(rawTimestamp.getTime()) ? null : rawTimestamp;
   }
 
-  // 2. Extração de envelopes Firestore REST/SDK se fornecidos diretamente
+  // Desembala envelopes de objetos REST do Firestore
   if (typeof rawTimestamp === 'object') {
     if (rawTimestamp.timestampValue) {
       return normalizeDate(rawTimestamp.timestampValue);
@@ -56,12 +55,8 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
       const d = new Date(seconds * 1000);
       return isNaN(d.getTime()) ? null : d;
     }
-    if (rawTimestamp.fields) {
-      return normalizeDate(rawTimestamp.fields.timestamp || rawTimestamp.fields.last_updated);
-    }
   }
 
-  // 3. String ISO ou números
   if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
     const d = new Date(rawTimestamp);
     if (!isNaN(d.getTime())) return d;
@@ -84,7 +79,7 @@ const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } 
   return { dateStr: formatter.format(d), ms: d.getTime() };
 };
 
-// Parser para higienizar dados vindos da API REST do Firestore ou do Worker
+// Parser robusto para desembaraçar a estrutura do Firestore REST/SDK
 const parseTrackingEvents = (rawEvents: any[]): TrackingEvent[] => {
   if (!Array.isArray(rawEvents)) return [];
 
@@ -92,7 +87,7 @@ const parseTrackingEvents = (rawEvents: any[]): TrackingEvent[] => {
     const fields = ev.fields || {};
 
     const event = ev.event || fields.event?.stringValue || 'evento_desconhecido';
-    const sessionId = ev.sessionId || fields.sessionId?.stringValue || 'sessao_desconhecida';
+    const sessionId = ev.sessionId || fields.sessionId?.stringValue || fields.session_id?.stringValue || 'sessao_desconhecida';
 
     let data = ev.data;
     if (!data && fields.data?.mapValue?.fields) {
@@ -109,7 +104,7 @@ const parseTrackingEvents = (rawEvents: any[]): TrackingEvent[] => {
       fields.timestamp?.stringValue ||
       fields.timestamp;
 
-    return { event, sessionId, data, timestamp };
+    return { event, sessionId, data: data || {}, timestamp };
   });
 };
 
@@ -136,7 +131,6 @@ export const AdminPanel: React.FC = () => {
   const [convMessages, setConvMessages] = useState<Message[]>([]);
   const [loadingConv, setLoadingConv] = useState(false);
 
-  // Filtro inicializado com o dia de hoje no fuso horário de Brasília
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = getBrasiliaDateStr(new Date());
     return today ? today.dateStr : new Date().toISOString().split('T')[0];
@@ -209,7 +203,9 @@ export const AdminPanel: React.FC = () => {
         const data = await res.json();
         if (data.success && data.events) {
           const parsed = parseTrackingEvents(data.events);
-          setTrackingStats(data.stats);
+          setTrackingStats(data.stats || {
+            consultas: 0, sucesso: 0, vazias: 0, carrinho: 0, orcamento: 0, whatsapp: 0, abandono: 0
+          });
           setTrackingEvents(parsed);
           return;
         }
@@ -473,16 +469,16 @@ export const AdminPanel: React.FC = () => {
 
           const sessionsMap: Record<string, typeof trackingEvents> = {};
           validEvents.forEach((ev) => {
-            const dateInfo = getBrasiliaDateStr(ev.timestamp);
-            if (!dateInfo) return;
             if (!sessionsMap[ev.sessionId]) sessionsMap[ev.sessionId] = [];
             sessionsMap[ev.sessionId].push(ev);
           });
 
           Object.keys(sessionsMap).forEach((sId) => {
-            sessionsMap[sId].sort(
-              (a, b) => (getBrasiliaDateStr(a.timestamp)?.ms || 0) - (getBrasiliaDateStr(b.timestamp)?.ms || 0)
-            );
+            sessionsMap[sId].sort((a, b) => {
+              const msA = getBrasiliaDateStr(a.timestamp)?.ms || 0;
+              const msB = getBrasiliaDateStr(b.timestamp)?.ms || 0;
+              return msA - msB;
+            });
           });
 
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
