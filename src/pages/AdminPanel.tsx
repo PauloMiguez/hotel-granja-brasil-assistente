@@ -38,11 +38,9 @@ interface TrackingEvent {
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp) return null;
 
-  // 1. String ISO ou timestamp numérico
   if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
     const d = new Date(rawTimestamp);
     if (!isNaN(d.getTime())) return d;
-    // Se for string numérica, tenta parsear como número
     if (typeof rawTimestamp === 'string') {
       const num = parseFloat(rawTimestamp);
       if (!isNaN(num)) {
@@ -53,25 +51,21 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
     return null;
   }
 
-  // 2. Objeto com timestampValue (Firestore REST)
   if (rawTimestamp.timestampValue) {
     const d = new Date(rawTimestamp.timestampValue);
     if (!isNaN(d.getTime())) return d;
   }
 
-  // 3. Objeto com _seconds (Firestore SDK)
   if (rawTimestamp._seconds !== undefined) {
     const d = new Date(rawTimestamp._seconds * 1000);
     if (!isNaN(d.getTime())) return d;
   }
 
-  // 4. Objeto com seconds (Firestore SDK alternativo)
   if (rawTimestamp.seconds !== undefined) {
     const d = new Date(rawTimestamp.seconds * 1000);
     if (!isNaN(d.getTime())) return d;
   }
 
-  // 5. Objeto Date nativo
   if (rawTimestamp instanceof Date) {
     return rawTimestamp;
   }
@@ -79,32 +73,10 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
   return null;
 };
 
-const getEventDateInfo = (event: TrackingEvent): { dateStr: string; ms: number } | null => {
-  // Fonte principal: timestamp persistido no evento.
-  const direct = getBrasiliaDateStr(event.timestamp);
-  if (direct) return direct;
-
-  // Fallback: alguns registros do endpoint chegam com timestamp vazio, mas o
-  // sessionId preserva o epoch usado na criação da sessão.
-  const sessionEpoch = event.sessionId?.match(/^session_(\d{10,})/i)?.[1];
-  if (sessionEpoch) return getBrasiliaDateStr(Number(sessionEpoch));
-
-  return null;
-};
-
-const getConfiguredDates = (event: TrackingEvent): string[] => {
-  const dates = [event.data?.checkin, event.data?.checkout];
-  return dates.filter((value): value is string =>
-    typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value),
-  );
-};
-
 const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } | null => {
   const d = normalizeDate(rawTimestamp);
   if (!d) return null;
 
-  // Não dependa do formato textual de `en-CA`: alguns ambientes podem
-  // devolver DD/MM/YYYY ou MM/DD/YYYY. FormatToParts elimina essa ambiguidade.
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
@@ -113,9 +85,7 @@ const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } 
   }).formatToParts(d);
 
   const values = Object.fromEntries(
-    parts
-      .filter(({ type }) => type !== 'literal')
-      .map(({ type, value }) => [type, value]),
+    parts.filter(({ type }) => type !== 'literal').map(({ type, value }) => [type, value])
   );
 
   if (!values.year || !values.month || !values.day) return null;
@@ -124,6 +94,11 @@ const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } 
     dateStr: `${values.year}-${values.month}-${values.day}`,
     ms: d.getTime(),
   };
+};
+
+// 🔥 AGORA: data do evento é obtida exclusivamente do timestamp
+const getEventDateInfo = (event: TrackingEvent): { dateStr: string; ms: number } | null => {
+  return getBrasiliaDateStr(event.timestamp);
 };
 
 export const AdminPanel: React.FC = () => {
@@ -149,11 +124,11 @@ export const AdminPanel: React.FC = () => {
   const [convMessages, setConvMessages] = useState<Message[]>([]);
   const [loadingConv, setLoadingConv] = useState(false);
 
-  // Inicializa o filtro com a data de hoje no fuso de Brasília
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const today = getBrasiliaDateStr(new Date());
-    return today ? today.dateStr : new Date().toISOString().split('T')[0];
-  });
+  // Data padrão = hoje em Brasília
+  const todayBrasilia = getBrasiliaDateStr(new Date());
+  const [selectedDate, setSelectedDate] = useState<string>(
+    todayBrasilia ? todayBrasilia.dateStr : new Date().toISOString().split('T')[0]
+  );
 
   // ========= BUSCAR CONVERSAS =========
   const fetchConversations = async () => {
@@ -171,7 +146,6 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
-  // ========= BUSCAR DETALHES DE CONVERSA =========
   const handleViewConversation = async (convId: string) => {
     setSelectedConvId(convId);
     setLoadingConv(true);
@@ -485,12 +459,12 @@ export const AdminPanel: React.FC = () => {
             { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
           ];
 
+          // 🔥 FILTRA EVENTOS VÁLIDOS
           const validEvents = trackingEvents.filter(
             (ev) => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
           );
 
-          // Agrupa por sessão mesmo quando o endpoint retorna timestamp vazio.
-          // A data poderá vir do timestamp, do epoch no sessionId ou de check-in/check-out.
+          // AGRUPA POR SESSÃO
           const sessionsMap: Record<string, typeof trackingEvents> = {};
           validEvents.forEach((ev) => {
             const sessionId = ev.sessionId || 'sessao-sem-id';
@@ -498,12 +472,16 @@ export const AdminPanel: React.FC = () => {
             sessionsMap[sessionId].push(ev);
           });
 
+          // ORDENA EVENTOS POR TIMESTAMP (CRESCENTE)
           Object.keys(sessionsMap).forEach((sId) => {
-            sessionsMap[sId].sort(
-              (a, b) => (getEventDateInfo(a)?.ms || 0) - (getEventDateInfo(b)?.ms || 0)
-            );
+            sessionsMap[sId].sort((a, b) => {
+              const da = getEventDateInfo(a);
+              const db = getEventDateInfo(b);
+              return (da?.ms || 0) - (db?.ms || 0);
+            });
           });
 
+          // CRIA LISTA DE SESSÕES COM METADADOS
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
             const lastEvent = events[events.length - 1];
             const lastDate = lastEvent ? getEventDateInfo(lastEvent) : null;
@@ -514,17 +492,21 @@ export const AdminPanel: React.FC = () => {
             };
           });
 
-          // O filtro aceita a data do evento e também as datas configuradas na
-          // consulta. Isso mantém a jornada visível mesmo quando timestamp chega vazio.
+          // 🔥 FILTRO POR DATA (USANDO APENAS O TIMESTAMP DO EVENTO)
           const filteredSessions = allSessions.filter((session) => {
             if (!selectedDate) return true;
-            return session.events.some((event) =>
-              getEventDateInfo(event)?.dateStr === selectedDate ||
-              getConfiguredDates(event).includes(selectedDate),
-            );
+            return session.events.some((event) => {
+              const dateInfo = getEventDateInfo(event);
+              return dateInfo?.dateStr === selectedDate;
+            });
           });
 
-          const sortedSessions = filteredSessions.sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
+          // ORDENA SESSÕES PELA DATA DO ÚLTIMO EVENTO (MAIS RECENTE PRIMEIRO)
+          const sortedSessions = filteredSessions.sort((a, b) => {
+            const aTime = a.lastTimestampMs;
+            const bTime = b.lastTimestampMs;
+            return bTime - aTime;
+          });
 
           if (sortedSessions.length === 0) {
             return (
@@ -587,9 +569,9 @@ export const AdminPanel: React.FC = () => {
                   }
 
                   const lastEvent = events[events.length - 1];
-                  const parsedLastDate = normalizeDate(lastEvent?.timestamp);
-                  const lastTimeStr = parsedLastDate
-                    ? parsedLastDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+                  const lastDate = lastEvent ? getEventDateInfo(lastEvent) : null;
+                  const lastTimeStr = lastDate?.ms
+                    ? new Date(lastDate.ms).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
                     : '';
 
                   const consulta = events.find((e) => e.event === 'consulta_iniciada');
@@ -661,9 +643,9 @@ export const AdminPanel: React.FC = () => {
 
                       <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2">
                         {events.map((ev, idx) => {
-                          const parsedEvDate = normalizeDate(ev.timestamp);
-                          const eventTime = parsedEvDate
-                            ? parsedEvDate.toLocaleTimeString('pt-BR', {
+                          const evDate = getEventDateInfo(ev);
+                          const eventTime = evDate?.ms
+                            ? new Date(evDate.ms).toLocaleTimeString('pt-BR', {
                                 timeZone: 'America/Sao_Paulo',
                                 hour: '2-digit',
                                 minute: '2-digit',
@@ -879,4 +861,3 @@ const TrackingCard: React.FC<{ label: string; value: number; color?: string }> =
     </div>
   );
 };
-
