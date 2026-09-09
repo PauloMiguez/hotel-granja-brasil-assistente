@@ -37,11 +37,8 @@ interface TrackingEvent {
 
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp) return null;
-
-  // Se já for Date
   if (rawTimestamp instanceof Date) return isNaN(rawTimestamp.getTime()) ? null : rawTimestamp;
 
-  // String ISO ou número
   if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
     const d = new Date(rawTimestamp);
     if (!isNaN(d.getTime())) return d;
@@ -55,13 +52,11 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
     }
   }
 
-  // Firestore REST (timestampValue)
   if (rawTimestamp.timestampValue) {
     const d = new Date(rawTimestamp.timestampValue);
     if (!isNaN(d.getTime())) return d;
   }
 
-  // Firestore SDK (_seconds ou seconds)
   const seconds = rawTimestamp._seconds ?? rawTimestamp.seconds;
   if (seconds !== undefined) {
     const d = new Date(seconds * 1000);
@@ -71,14 +66,27 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
   return null;
 };
 
+// Gera rigorosamente YYYY-MM-DD sem ruídos de localidade
 const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } | null => {
   const d = normalizeDate(rawTimestamp);
   if (!d) return null;
 
-  // Extrai YYYY-MM-DD no fuso de Brasília (America/Sao_Paulo)
-  const dateStr = d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+
+  const parts = dtf.formatToParts(d);
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
+
+  if (!year || !month || !day) return null;
+
   return {
-    dateStr,
+    dateStr: `${year}-${month}-${day}`, // Formato exato YYYY-MM-DD
     ms: d.getTime(),
   };
 };
@@ -457,36 +465,41 @@ export const AdminPanel: React.FC = () => {
             sessionsMap[sessionId].push(ev);
           });
 
-          // 2. Mapeia cada sessão calculando a data/timestamp com base no evento MAIS RECENTE
+          // 2. Mapeia cada sessão guardando o conjunto de TODAS as datas em que a sessão teve atividade
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
-            // Ordena os eventos da sessão cronologicamente (do mais antigo ao mais recente)
+            // Ordena os eventos da sessão do mais antigo ao mais recente
             const sortedEvents = [...events].sort((a, b) => {
               const msA = normalizeDate(a.timestamp)?.getTime() || 0;
               const msB = normalizeDate(b.timestamp)?.getTime() || 0;
               return msA - msB;
             });
 
-            // O evento mais recente determina a data/hora oficial da sessão
+            // Coleta todas as datas (YYYY-MM-DD em Brasília) em que houve evento nesta sessão
+            const eventDates = new Set<string>();
+            sortedEvents.forEach((ev) => {
+              const dateInfo = getBrasiliaDateStr(ev.timestamp);
+              if (dateInfo) eventDates.add(dateInfo.dateStr);
+            });
+
             const lastEvent = sortedEvents[sortedEvents.length - 1];
-            const sessionDateInfo = getBrasiliaDateStr(lastEvent?.timestamp);
+            const lastDateInfo = getBrasiliaDateStr(lastEvent?.timestamp);
 
             return {
               sessionId,
               events: sortedEvents,
-              sessionDateStr: sessionDateInfo?.dateStr || '', // YYYY-MM-DD no fuso de Brasília
-              lastTimestampMs: sessionDateInfo?.ms || 0,
+              eventDates, // Conjunto de datas YYYY-MM-DD da sessão
+              lastTimestampMs: lastDateInfo?.ms || 0,
             };
           });
 
-          // 3. Aplica o filtro por data selecionada
+          // 3. Aplica o filtro: exibe a sessão se ela tiver qualquer evento na data selecionada
           const filteredSessions = allSessions.filter((session) => {
             if (!selectedDate) return true;
-            return session.sessionDateStr === selectedDate;
+            return session.eventDates.has(selectedDate);
           });
 
-          // 4. Ordena as sessões filtradas (mais recentes primeiro)
+          // 4. Ordena as sessões filtradas pelas mais recentes
           const sortedSessions = filteredSessions.sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
-
           if (sortedSessions.length === 0) {
             return (
               <div className="text-gray-500 text-center py-12">
@@ -585,8 +598,8 @@ export const AdminPanel: React.FC = () => {
                                 <div className="flex flex-col items-center z-10">
                                   <div
                                     className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted
-                                        ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
-                                        : 'bg-slate-200 text-slate-400'
+                                      ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
+                                      : 'bg-slate-200 text-slate-400'
                                       }`}
                                   >
                                     {step.icon}
@@ -603,8 +616,8 @@ export const AdminPanel: React.FC = () => {
                                   <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
                                     <div
                                       className={`h-full transition-all ${events.some((e) => e.event === JOURNEY_STEPS[idx + 1]?.key)
-                                          ? 'bg-indigo-600'
-                                          : 'bg-transparent'
+                                        ? 'bg-indigo-600'
+                                        : 'bg-transparent'
                                         }`}
                                     />
                                   </div>
@@ -772,8 +785,8 @@ export const AdminPanel: React.FC = () => {
                     <div key={idx} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                       <div
                         className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${isUser
-                            ? 'bg-indigo-600 text-white rounded-br-none'
-                            : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
+                          ? 'bg-indigo-600 text-white rounded-br-none'
+                          : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
                           }`}
                       >
                         <div className="font-semibold text-[10px] mb-1 opacity-75">
