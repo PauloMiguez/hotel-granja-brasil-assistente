@@ -38,9 +38,11 @@ interface TrackingEvent {
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp) return null;
 
+  // 1. String ISO ou timestamp numérico
   if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
     const d = new Date(rawTimestamp);
     if (!isNaN(d.getTime())) return d;
+    // Se for string numérica, tenta parsear como número
     if (typeof rawTimestamp === 'string') {
       const num = parseFloat(rawTimestamp);
       if (!isNaN(num)) {
@@ -51,21 +53,25 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
     return null;
   }
 
+  // 2. Objeto com timestampValue (Firestore REST)
   if (rawTimestamp.timestampValue) {
     const d = new Date(rawTimestamp.timestampValue);
     if (!isNaN(d.getTime())) return d;
   }
 
+  // 3. Objeto com _seconds (Firestore SDK)
   if (rawTimestamp._seconds !== undefined) {
     const d = new Date(rawTimestamp._seconds * 1000);
     if (!isNaN(d.getTime())) return d;
   }
 
+  // 4. Objeto com seconds (Firestore SDK alternativo)
   if (rawTimestamp.seconds !== undefined) {
     const d = new Date(rawTimestamp.seconds * 1000);
     if (!isNaN(d.getTime())) return d;
   }
 
+  // 5. Objeto Date nativo
   if (rawTimestamp instanceof Date) {
     return rawTimestamp;
   }
@@ -77,26 +83,14 @@ const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } 
   const d = normalizeDate(rawTimestamp);
   if (!d) return null;
 
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Sao_Paulo',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(d);
-
-  const values = Object.fromEntries(
-    parts.filter(({ type }) => type !== 'literal').map(({ type, value }) => [type, value])
-  );
-
-  if (!values.year || !values.month || !values.day) return null;
-
+  // Usa toLocaleDateString com fuso de Brasília para extrair a data no formato YYYY-MM-DD
+  const dateStr = d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
   return {
-    dateStr: `${values.year}-${values.month}-${values.day}`,
+    dateStr,
     ms: d.getTime(),
   };
 };
 
-// 🔥 AGORA: data do evento é obtida exclusivamente do timestamp
 const getEventDateInfo = (event: TrackingEvent): { dateStr: string; ms: number } | null => {
   return getBrasiliaDateStr(event.timestamp);
 };
@@ -459,12 +453,11 @@ export const AdminPanel: React.FC = () => {
             { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
           ];
 
-          // 🔥 FILTRA EVENTOS VÁLIDOS
           const validEvents = trackingEvents.filter(
             (ev) => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
           );
 
-          // AGRUPA POR SESSÃO
+          // Agrupa por sessão e ordena eventos internamente por timestamp
           const sessionsMap: Record<string, typeof trackingEvents> = {};
           validEvents.forEach((ev) => {
             const sessionId = ev.sessionId || 'sessao-sem-id';
@@ -472,16 +465,12 @@ export const AdminPanel: React.FC = () => {
             sessionsMap[sessionId].push(ev);
           });
 
-          // ORDENA EVENTOS POR TIMESTAMP (CRESCENTE)
           Object.keys(sessionsMap).forEach((sId) => {
-            sessionsMap[sId].sort((a, b) => {
-              const da = getEventDateInfo(a);
-              const db = getEventDateInfo(b);
-              return (da?.ms || 0) - (db?.ms || 0);
-            });
+            sessionsMap[sId].sort(
+              (a, b) => (getEventDateInfo(a)?.ms || 0) - (getEventDateInfo(b)?.ms || 0)
+            );
           });
 
-          // CRIA LISTA DE SESSÕES COM METADADOS
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
             const lastEvent = events[events.length - 1];
             const lastDate = lastEvent ? getEventDateInfo(lastEvent) : null;
@@ -492,7 +481,7 @@ export const AdminPanel: React.FC = () => {
             };
           });
 
-          // 🔥 FILTRO POR DATA (USANDO APENAS O TIMESTAMP DO EVENTO)
+          // Filtro por data: usa a data do evento (timestamp) normalizada
           const filteredSessions = allSessions.filter((session) => {
             if (!selectedDate) return true;
             return session.events.some((event) => {
@@ -501,12 +490,7 @@ export const AdminPanel: React.FC = () => {
             });
           });
 
-          // ORDENA SESSÕES PELA DATA DO ÚLTIMO EVENTO (MAIS RECENTE PRIMEIRO)
-          const sortedSessions = filteredSessions.sort((a, b) => {
-            const aTime = a.lastTimestampMs;
-            const bTime = b.lastTimestampMs;
-            return bTime - aTime;
-          });
+          const sortedSessions = filteredSessions.sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
 
           if (sortedSessions.length === 0) {
             return (
