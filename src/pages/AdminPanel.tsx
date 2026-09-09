@@ -67,13 +67,10 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
   return null;
 };
 
-// Captura a data do evento ou extrai do sessionId como fallback
 const getDateFromEvent = (ev: TrackingEvent): Date | null => {
-  // 1. Tenta parsear o timestamp nativo do evento
   const parsed = normalizeDate(ev.timestamp);
   if (parsed) return parsed;
 
-  // 2. Fallback: Extrai o timestamp em milissegundos do sessionId (ex: session_1788461737455_z5xtlky5k)
   if (ev.sessionId) {
     const parts = ev.sessionId.split('_');
     if (parts.length >= 2) {
@@ -88,7 +85,6 @@ const getDateFromEvent = (ev: TrackingEvent): Date | null => {
   return null;
 };
 
-// Aceita qualquer entrada de data (Date, string ISO, timestamp ou null)
 const getBrasiliaDateStr = (rawInput: any): { dateStr: string; ms: number } | null => {
   const d = rawInput instanceof Date ? rawInput : normalizeDate(rawInput);
   if (!d) return null;
@@ -136,7 +132,6 @@ export const AdminPanel: React.FC = () => {
   const [convMessages, setConvMessages] = useState<Message[]>([]);
   const [loadingConv, setLoadingConv] = useState(false);
 
-  // Data padrão = hoje em Brasília
   const todayBrasilia = getBrasiliaDateStr(new Date());
   const [selectedDate, setSelectedDate] = useState<string>(
     todayBrasilia ? todayBrasilia.dateStr : new Date().toISOString().split('T')[0]
@@ -437,6 +432,207 @@ export const AdminPanel: React.FC = () => {
         </div>
       </div>
 
+      {/* ========= MAPA DE CALOR E FREQUÊNCIA ========= */}
+      <div className="mb-8">
+        <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📊 Mapa de Calor de Buscas</h2>
+
+        {(() => {
+          const consultas = trackingEvents.filter(ev => ev.event === 'consulta_iniciada' && ev.data?.checkin);
+
+          if (consultas.length === 0) {
+            return (
+              <div className="bg-white rounded-lg shadow p-6 text-center text-slate-500">
+                Nenhuma consulta de disponibilidade registrada ainda.
+              </div>
+            );
+          }
+
+          // Agrupa por data de check-in
+          const freqMap: Record<string, { checkin: string; checkout: string; adultos: number; criancas: number; count: number }> = {};
+
+          consultas.forEach(ev => {
+            const { checkin, checkout, adultos = 0, criancas = 0 } = ev.data;
+            if (!checkin) return;
+            const key = checkin;
+            if (!freqMap[key]) {
+              freqMap[key] = { checkin, checkout, adultos, criancas, count: 0 };
+            }
+            freqMap[key].count += 1;
+          });
+
+          const freqArray = Object.values(freqMap).sort((a, b) => b.count - a.count);
+
+          // Determina o mês com mais buscas
+          const allDates = consultas.map(ev => ev.data.checkin).filter(Boolean);
+          const monthCount: Record<string, number> = {};
+          allDates.forEach(d => {
+            const parts = d.split('-');
+            if (parts.length === 3) {
+              const monthKey = `${parts[0]}-${parts[1]}`;
+              monthCount[monthKey] = (monthCount[monthKey] || 0) + 1;
+            }
+          });
+
+          let busiestMonth = '';
+          let maxCount = 0;
+          for (const [month, count] of Object.entries(monthCount)) {
+            if (count > maxCount) {
+              maxCount = count;
+              busiestMonth = month;
+            }
+          }
+
+          if (!busiestMonth) {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            busiestMonth = `${year}-${month}`;
+          }
+
+          const [year, month] = busiestMonth.split('-').map(Number);
+          const firstDay = new Date(year, month - 1, 1).getDay();
+          const daysInMonth = new Date(year, month, 0).getDate();
+
+          const dayFreq: Record<number, number> = {};
+          consultas.forEach(ev => {
+            const d = ev.data.checkin;
+            if (!d) return;
+            const [y, m, day] = d.split('-').map(Number);
+            if (y === year && m === month) {
+              dayFreq[day] = (dayFreq[day] || 0) + 1;
+            }
+          });
+
+          const maxFreq = Math.max(...Object.values(dayFreq), 1);
+
+          const getColor = (freq: number) => {
+            if (freq === 0) return 'bg-slate-100';
+            const intensity = Math.min(1, freq / maxFreq);
+            if (intensity <= 0.2) return 'bg-yellow-100';
+            if (intensity <= 0.4) return 'bg-yellow-300';
+            if (intensity <= 0.6) return 'bg-orange-300';
+            if (intensity <= 0.8) return 'bg-orange-500 text-white';
+            return 'bg-red-600 text-white';
+          };
+
+          const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+          const monthName = monthNames[month - 1];
+
+          return (
+            <div className="bg-white rounded-lg shadow p-4 space-y-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-indigo-50 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold text-indigo-700">{consultas.length}</div>
+                  <div className="text-xs text-indigo-600">Total de buscas</div>
+                </div>
+                <div className="bg-emerald-50 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold text-emerald-700">{freqArray.length}</div>
+                  <div className="text-xs text-emerald-600">Datas únicas</div>
+                </div>
+                <div className="bg-amber-50 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold text-amber-700">{freqArray[0]?.count || 0}</div>
+                  <div className="text-xs text-amber-600">Pico de buscas (dia)</div>
+                </div>
+                <div className="bg-rose-50 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold text-rose-700">{monthName}</div>
+                  <div className="text-xs text-rose-600">Mês mais quente</div>
+                </div>
+              </div>
+
+              {/* Tabela de Frequência */}
+              <div>
+                <h3 className="text-md font-semibold text-slate-700 mb-2">📋 Tabela de Frequência por Data de Check‑in</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-700">
+                        <th className="px-4 py-2 text-left">Check‑in</th>
+                        <th className="px-4 py-2 text-left">Check‑out</th>
+                        <th className="px-4 py-2 text-left">Hóspedes</th>
+                        <th className="px-4 py-2 text-center">Frequência</th>
+                        <th className="px-4 py-2 text-left">Intensidade</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {freqArray.slice(0, 15).map((item, idx) => {
+                        const max = freqArray[0]?.count || 1;
+                        const width = (item.count / max) * 100;
+                        return (
+                          <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
+                            <td className="px-4 py-2 font-medium">{item.checkin}</td>
+                            <td className="px-4 py-2">{item.checkout || '-'}</td>
+                            <td className="px-4 py-2">{item.adultos} adulto(s){item.criancas ? ` + ${item.criancas} criança(s)` : ''}</td>
+                            <td className="px-4 py-2 text-center font-bold">{item.count}</td>
+                            <td className="px-4 py-2">
+                              <div className="w-full bg-slate-200 rounded-full h-2.5">
+                                <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${Math.min(width, 100)}%` }}></div>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {freqArray.length > 15 && (
+                        <tr className="text-slate-400 text-xs">
+                          <td colSpan={5} className="px-4 py-2 text-center">... e mais {freqArray.length - 15} datas</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Mapa de Calor (Calendário) */}
+              <div>
+                <h3 className="text-md font-semibold text-slate-700 mb-2">
+                  🗓️ Mapa de Calor – {monthName} de {year}
+                </h3>
+                <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                  <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-slate-500 mb-1">
+                    <div>Dom</div>
+                    <div>Seg</div>
+                    <div>Ter</div>
+                    <div>Qua</div>
+                    <div>Qui</div>
+                    <div>Sex</div>
+                    <div>Sáb</div>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {Array.from({ length: firstDay }).map((_, idx) => (
+                      <div key={`empty-${idx}`} className="aspect-square bg-slate-50 rounded"></div>
+                    ))}
+                    {Array.from({ length: daysInMonth }).map((_, day) => {
+                      const dayNum = day + 1;
+                      const freq = dayFreq[dayNum] || 0;
+                      const colorClass = getColor(freq);
+                      return (
+                        <div
+                          key={dayNum}
+                          className={`aspect-square flex items-center justify-center text-xs rounded font-medium transition-all ${colorClass}`}
+                        >
+                          {dayNum}
+                          {freq > 0 && <span className="ml-0.5 text-[10px] opacity-70">({freq})</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center justify-end gap-3 mt-3 text-xs text-slate-500">
+                    <span>Baixa</span>
+                    <div className="flex gap-1">
+                      <div className="w-4 h-4 bg-yellow-100 rounded"></div>
+                      <div className="w-4 h-4 bg-yellow-300 rounded"></div>
+                      <div className="w-4 h-4 bg-orange-300 rounded"></div>
+                      <div className="w-4 h-4 bg-orange-500 rounded"></div>
+                      <div className="w-4 h-4 bg-red-600 rounded"></div>
+                    </div>
+                    <span>Alta</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+
       {/* ========= JORNADAS DOS CLIENTES ========= */}
       <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-2 mb-4 gap-2">
         <h2 className="text-xl font-semibold text-[#1e293b]">🧑‍💻 Jornadas dos Clientes</h2>
@@ -475,7 +671,6 @@ export const AdminPanel: React.FC = () => {
             (ev) => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
           );
 
-          // 1. Agrupa eventos por sessionId
           const sessionsMap: Record<string, TrackingEvent[]> = {};
           validEvents.forEach((ev) => {
             const sessionId = ev.sessionId || 'sessao-sem-id';
@@ -483,8 +678,6 @@ export const AdminPanel: React.FC = () => {
             sessionsMap[sessionId].push(ev);
           });
 
-          // 2. Mapeia cada sessão guardando o conjunto de TODAS as datas em que a sessão teve atividade
-          // Mapeia cada sessão calculando a data com base na data extraída do evento/sessionId
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
             const sortedEvents = [...events].sort((a, b) => {
               const msA = getDateFromEvent(a)?.getTime() || 0;
@@ -511,13 +704,11 @@ export const AdminPanel: React.FC = () => {
             };
           });
 
-          // 3. Aplica o filtro: exibe a sessão se ela tiver qualquer evento na data selecionada
           const filteredSessions = allSessions.filter((session) => {
             if (!selectedDate) return true;
             return session.eventDates.has(selectedDate);
           });
 
-          // 4. Ordena as sessões filtradas pelas mais recentes
           const sortedSessions = filteredSessions.sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
           if (sortedSessions.length === 0) {
             return (
@@ -606,7 +797,6 @@ export const AdminPanel: React.FC = () => {
                         <span className="text-xs font-medium text-slate-400">{lastTimeStr}</span>
                       </div>
 
-                      {/* BARRA DE ETAPAS DA JORNADA */}
                       <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
                         <div className="flex items-center justify-between relative">
                           {JOURNEY_STEPS.map((step, idx) => {
@@ -647,7 +837,6 @@ export const AdminPanel: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* LISTA DE EVENTOS INDIVIDUAIS DA SESSÃO */}
                       <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2">
                         {events.map((ev, idx) => {
                           const evDate = normalizeDate(ev.timestamp);
