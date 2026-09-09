@@ -38,42 +38,34 @@ interface TrackingEvent {
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp) return null;
 
-  // 1. String ISO ou timestamp numérico
+  // Se já for Date
+  if (rawTimestamp instanceof Date) return isNaN(rawTimestamp.getTime()) ? null : rawTimestamp;
+
+  // String ISO ou número
   if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
     const d = new Date(rawTimestamp);
     if (!isNaN(d.getTime())) return d;
-    // Se for string numérica, tenta parsear como número
+
     if (typeof rawTimestamp === 'string') {
-      const num = parseFloat(rawTimestamp);
+      const num = Number(rawTimestamp);
       if (!isNaN(num)) {
         const d2 = new Date(num);
         if (!isNaN(d2.getTime())) return d2;
       }
     }
-    return null;
   }
 
-  // 2. Objeto com timestampValue (Firestore REST)
+  // Firestore REST (timestampValue)
   if (rawTimestamp.timestampValue) {
     const d = new Date(rawTimestamp.timestampValue);
     if (!isNaN(d.getTime())) return d;
   }
 
-  // 3. Objeto com _seconds (Firestore SDK)
-  if (rawTimestamp._seconds !== undefined) {
-    const d = new Date(rawTimestamp._seconds * 1000);
+  // Firestore SDK (_seconds ou seconds)
+  const seconds = rawTimestamp._seconds ?? rawTimestamp.seconds;
+  if (seconds !== undefined) {
+    const d = new Date(seconds * 1000);
     if (!isNaN(d.getTime())) return d;
-  }
-
-  // 4. Objeto com seconds (Firestore SDK alternativo)
-  if (rawTimestamp.seconds !== undefined) {
-    const d = new Date(rawTimestamp.seconds * 1000);
-    if (!isNaN(d.getTime())) return d;
-  }
-
-  // 5. Objeto Date nativo
-  if (rawTimestamp instanceof Date) {
-    return rawTimestamp;
   }
 
   return null;
@@ -83,7 +75,7 @@ const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } 
   const d = normalizeDate(rawTimestamp);
   if (!d) return null;
 
-  // Usa toLocaleDateString com fuso de Brasília para extrair a data no formato YYYY-MM-DD
+  // Extrai YYYY-MM-DD no fuso de Brasília (America/Sao_Paulo)
   const dateStr = d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
   return {
     dateStr,
@@ -457,39 +449,42 @@ export const AdminPanel: React.FC = () => {
             (ev) => !['teste_final', 'diagnostico', 'teste'].includes(ev.event)
           );
 
-          // Agrupa por sessão e ordena eventos internamente por timestamp
-          const sessionsMap: Record<string, typeof trackingEvents> = {};
+          // 1. Agrupa eventos por sessionId
+          const sessionsMap: Record<string, TrackingEvent[]> = {};
           validEvents.forEach((ev) => {
             const sessionId = ev.sessionId || 'sessao-sem-id';
             if (!sessionsMap[sessionId]) sessionsMap[sessionId] = [];
             sessionsMap[sessionId].push(ev);
           });
 
-          Object.keys(sessionsMap).forEach((sId) => {
-            sessionsMap[sId].sort(
-              (a, b) => (getEventDateInfo(a)?.ms || 0) - (getEventDateInfo(b)?.ms || 0)
-            );
-          });
-
+          // 2. Mapeia cada sessão calculando a data/timestamp com base no evento MAIS RECENTE
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
-            const lastEvent = events[events.length - 1];
-            const lastDate = lastEvent ? getEventDateInfo(lastEvent) : null;
+            // Ordena os eventos da sessão cronologicamente (do mais antigo ao mais recente)
+            const sortedEvents = [...events].sort((a, b) => {
+              const msA = normalizeDate(a.timestamp)?.getTime() || 0;
+              const msB = normalizeDate(b.timestamp)?.getTime() || 0;
+              return msA - msB;
+            });
+
+            // O evento mais recente determina a data/hora oficial da sessão
+            const lastEvent = sortedEvents[sortedEvents.length - 1];
+            const sessionDateInfo = getBrasiliaDateStr(lastEvent?.timestamp);
+
             return {
               sessionId,
-              events,
-              lastTimestampMs: lastDate?.ms || 0,
+              events: sortedEvents,
+              sessionDateStr: sessionDateInfo?.dateStr || '', // YYYY-MM-DD no fuso de Brasília
+              lastTimestampMs: sessionDateInfo?.ms || 0,
             };
           });
 
-          // Filtro por data: usa a data do evento (timestamp) normalizada
+          // 3. Aplica o filtro por data selecionada
           const filteredSessions = allSessions.filter((session) => {
             if (!selectedDate) return true;
-            return session.events.some((event) => {
-              const dateInfo = getEventDateInfo(event);
-              return dateInfo?.dateStr === selectedDate;
-            });
+            return session.sessionDateStr === selectedDate;
           });
 
+          // 4. Ordena as sessões filtradas (mais recentes primeiro)
           const sortedSessions = filteredSessions.sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
 
           if (sortedSessions.length === 0) {
@@ -527,7 +522,7 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               <div className="divide-y divide-gray-100">
-                {sortedSessions.map(({ sessionId, events }) => {
+                {sortedSessions.map(({ sessionId, events, lastTimestampMs }) => {
                   const shortId = sessionId.length > 20 ? `${sessionId.substring(0, 10)}...` : sessionId;
 
                   const hasWhatsApp = events.some((e) => e.event === 'whatsapp_enviado');
@@ -552,10 +547,8 @@ export const AdminPanel: React.FC = () => {
                     statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
                   }
 
-                  const lastEvent = events[events.length - 1];
-                  const lastDate = lastEvent ? getEventDateInfo(lastEvent) : null;
-                  const lastTimeStr = lastDate?.ms
-                    ? new Date(lastDate.ms).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+                  const lastTimeStr = lastTimestampMs
+                    ? new Date(lastTimestampMs).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
                     : '';
 
                   const consulta = events.find((e) => e.event === 'consulta_iniciada');
@@ -581,28 +574,26 @@ export const AdminPanel: React.FC = () => {
                         <span className="text-xs font-medium text-slate-400">{lastTimeStr}</span>
                       </div>
 
+                      {/* BARRA DE ETAPAS DA JORNADA */}
                       <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
                         <div className="flex items-center justify-between relative">
                           {JOURNEY_STEPS.map((step, idx) => {
-                            const stepEvent = events.find((e) => e.event === step.key);
-                            const isCompleted = !!stepEvent;
+                            const isCompleted = events.some((e) => e.event === step.key);
 
                             return (
                               <React.Fragment key={step.key}>
                                 <div className="flex flex-col items-center z-10">
                                   <div
-                                    className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
-                                      isCompleted
+                                    className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted
                                         ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50'
                                         : 'bg-slate-200 text-slate-400'
-                                    }`}
+                                      }`}
                                   >
                                     {step.icon}
                                   </div>
                                   <span
-                                    className={`text-[11px] mt-1 font-medium ${
-                                      isCompleted ? 'text-slate-800' : 'text-slate-400'
-                                    }`}
+                                    className={`text-[11px] mt-1 font-medium ${isCompleted ? 'text-slate-800' : 'text-slate-400'
+                                      }`}
                                   >
                                     {step.label}
                                   </span>
@@ -611,11 +602,10 @@ export const AdminPanel: React.FC = () => {
                                 {idx < JOURNEY_STEPS.length - 1 && (
                                   <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
                                     <div
-                                      className={`h-full transition-all ${
-                                        events.some((e) => e.event === JOURNEY_STEPS[idx + 1]?.key)
+                                      className={`h-full transition-all ${events.some((e) => e.event === JOURNEY_STEPS[idx + 1]?.key)
                                           ? 'bg-indigo-600'
                                           : 'bg-transparent'
-                                      }`}
+                                        }`}
                                     />
                                   </div>
                                 )}
@@ -625,15 +615,17 @@ export const AdminPanel: React.FC = () => {
                         </div>
                       </div>
 
+                      {/* LISTA DE EVENTOS INDIVIDUAIS DA SESSÃO */}
                       <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2">
                         {events.map((ev, idx) => {
-                          const evDate = getEventDateInfo(ev);
-                          const eventTime = evDate?.ms
-                            ? new Date(evDate.ms).toLocaleTimeString('pt-BR', {
-                                timeZone: 'America/Sao_Paulo',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
+                          const evDate = normalizeDate(ev.timestamp);
+                          const eventTime = evDate
+                            ? evDate.toLocaleTimeString('pt-BR', {
+                              timeZone: 'America/Sao_Paulo',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit',
+                            })
                             : '';
 
                           let detail = '';
@@ -654,15 +646,14 @@ export const AdminPanel: React.FC = () => {
                               detail = `Valor do orçamento: R$ ${ev.data?.total || 0}`;
                               break;
                             case 'whatsapp_enviado':
-                              detail = `Contato via WhatsApp por ${ev.data?.cliente || 'Cliente'} (R$ ${
-                                ev.data?.total || 0
-                              })`;
+                              detail = `Contato via WhatsApp por ${ev.data?.cliente || 'Cliente'} (R$ ${ev.data?.total || 0
+                                })`;
                               break;
                             case 'abandono':
                               detail = `Abandonou a página na etapa: ${ev.data?.stage || 'desconhecida'}`;
                               break;
                             default:
-                              detail = JSON.stringify(ev.data || {});
+                              detail = typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data || {});
                           }
 
                           return (
@@ -780,11 +771,10 @@ export const AdminPanel: React.FC = () => {
                   return (
                     <div key={idx} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                       <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${
-                          isUser
+                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${isUser
                             ? 'bg-indigo-600 text-white rounded-br-none'
                             : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
-                        }`}
+                          }`}
                       >
                         <div className="font-semibold text-[10px] mb-1 opacity-75">
                           {isUser ? '👤 Cliente' : '🤖 Assistente'}
