@@ -35,8 +35,11 @@ interface TrackingEvent {
 
 // ========= FUNÇÕES DE NORMALIZAÇÃO DE DATA =========
 
+// ========= FUNÇÕES DE NORMALIZAÇÃO DE DATA =========
+
 const normalizeDate = (rawTimestamp: any): Date | null => {
-  if (!rawTimestamp) return null;
+  if (!rawTimestamp || rawTimestamp === 'Data Indisponivel') return null;
+
   if (rawTimestamp instanceof Date) return isNaN(rawTimestamp.getTime()) ? null : rawTimestamp;
 
   if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
@@ -66,10 +69,29 @@ const normalizeDate = (rawTimestamp: any): Date | null => {
   return null;
 };
 
-// Gera rigorosamente YYYY-MM-DD sem ruídos de localidade
-const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } | null => {
-  const d = normalizeDate(rawTimestamp);
-  if (!d) return null;
+// Captura a data do evento ou extrai do sessionId como fallback
+const getDateFromEvent = (ev: TrackingEvent): Date | null => {
+  // 1. Tenta parsear o timestamp nativo do evento
+  const parsed = normalizeDate(ev.timestamp);
+  if (parsed) return parsed;
+
+  // 2. Fallback: Extrai o timestamp em milissegundos do sessionId (ex: session_1788461737455_z5xtlky5k)
+  if (ev.sessionId) {
+    const parts = ev.sessionId.split('_');
+    if (parts.length >= 2) {
+      const ms = Number(parts[1]);
+      if (!isNaN(ms) && ms > 0) {
+        const d = new Date(ms);
+        if (!isNaN(d.getTime())) return d;
+      }
+    }
+  }
+
+  return null;
+};
+
+const getBrasiliaDateStr = (rawDate: Date | null): { dateStr: string; ms: number } | null => {
+  if (!rawDate) return null;
 
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Sao_Paulo',
@@ -78,7 +100,7 @@ const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } 
     day: '2-digit',
   });
 
-  const parts = dtf.formatToParts(d);
+  const parts = dtf.formatToParts(rawDate);
   const year = parts.find((p) => p.type === 'year')?.value;
   const month = parts.find((p) => p.type === 'month')?.value;
   const day = parts.find((p) => p.type === 'day')?.value;
@@ -86,13 +108,9 @@ const getBrasiliaDateStr = (rawTimestamp: any): { dateStr: string; ms: number } 
   if (!year || !month || !day) return null;
 
   return {
-    dateStr: `${year}-${month}-${day}`, // Formato exato YYYY-MM-DD
-    ms: d.getTime(),
+    dateStr: `${year}-${month}-${day}`,
+    ms: rawDate.getTime(),
   };
-};
-
-const getEventDateInfo = (event: TrackingEvent): { dateStr: string; ms: number } | null => {
-  return getBrasiliaDateStr(event.timestamp);
 };
 
 export const AdminPanel: React.FC = () => {
@@ -466,28 +484,29 @@ export const AdminPanel: React.FC = () => {
           });
 
           // 2. Mapeia cada sessão guardando o conjunto de TODAS as datas em que a sessão teve atividade
+          // Mapeia cada sessão calculando a data com base na data extraída do evento/sessionId
           const allSessions = Object.entries(sessionsMap).map(([sessionId, events]) => {
-            // Ordena os eventos da sessão do mais antigo ao mais recente
             const sortedEvents = [...events].sort((a, b) => {
-              const msA = normalizeDate(a.timestamp)?.getTime() || 0;
-              const msB = normalizeDate(b.timestamp)?.getTime() || 0;
+              const msA = getDateFromEvent(a)?.getTime() || 0;
+              const msB = getDateFromEvent(b)?.getTime() || 0;
               return msA - msB;
             });
 
-            // Coleta todas as datas (YYYY-MM-DD em Brasília) em que houve evento nesta sessão
             const eventDates = new Set<string>();
             sortedEvents.forEach((ev) => {
-              const dateInfo = getBrasiliaDateStr(ev.timestamp);
+              const dateObj = getDateFromEvent(ev);
+              const dateInfo = getBrasiliaDateStr(dateObj);
               if (dateInfo) eventDates.add(dateInfo.dateStr);
             });
 
             const lastEvent = sortedEvents[sortedEvents.length - 1];
-            const lastDateInfo = getBrasiliaDateStr(lastEvent?.timestamp);
+            const lastDateObj = getDateFromEvent(lastEvent);
+            const lastDateInfo = getBrasiliaDateStr(lastDateObj);
 
             return {
               sessionId,
               events: sortedEvents,
-              eventDates, // Conjunto de datas YYYY-MM-DD da sessão
+              eventDates,
               lastTimestampMs: lastDateInfo?.ms || 0,
             };
           });
