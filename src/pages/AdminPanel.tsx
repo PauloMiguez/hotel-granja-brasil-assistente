@@ -35,8 +35,6 @@ interface TrackingEvent {
 
 // ========= FUNÇÕES DE NORMALIZAÇÃO DE DATA =========
 
-// ========= FUNÇÕES DE NORMALIZAÇÃO DE DATA =========
-
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp || rawTimestamp === 'Data Indisponivel') return null;
 
@@ -90,8 +88,10 @@ const getDateFromEvent = (ev: TrackingEvent): Date | null => {
   return null;
 };
 
-const getBrasiliaDateStr = (rawDate: Date | null): { dateStr: string; ms: number } | null => {
-  if (!rawDate) return null;
+// Aceita qualquer entrada de data (Date, string ISO, timestamp ou null)
+const getBrasiliaDateStr = (rawInput: any): { dateStr: string; ms: number } | null => {
+  const d = rawInput instanceof Date ? rawInput : normalizeDate(rawInput);
+  if (!d) return null;
 
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Sao_Paulo',
@@ -100,7 +100,7 @@ const getBrasiliaDateStr = (rawDate: Date | null): { dateStr: string; ms: number
     day: '2-digit',
   });
 
-  const parts = dtf.formatToParts(rawDate);
+  const parts = dtf.formatToParts(d);
   const year = parts.find((p) => p.type === 'year')?.value;
   const month = parts.find((p) => p.type === 'month')?.value;
   const day = parts.find((p) => p.type === 'day')?.value;
@@ -109,7 +109,7 @@ const getBrasiliaDateStr = (rawDate: Date | null): { dateStr: string; ms: number
 
   return {
     dateStr: `${year}-${month}-${day}`,
-    ms: rawDate.getTime(),
+    ms: d.getTime(),
   };
 };
 
