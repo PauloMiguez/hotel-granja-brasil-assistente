@@ -34,12 +34,21 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
     const extraGuestCost = item.extraGuests * 102 * itemNights;
     totalExtraGuests += extraGuestCost;
 
+    // Monta a descrição das crianças com idades
+    let childrenInfo = '';
+    if (item.hasChildren) {
+      if (item.childrenCount === 1) {
+        childrenInfo = ` + 1 criança (${item.childAge1} anos)`;
+      } else if (item.childrenCount === 2) {
+        childrenInfo = ` + 2 crianças (${item.childAge1} e ${item.childAge2} anos)`;
+      }
+    }
+
     return (
       <div key={idx} className="border-b border-white/20 py-3 last:border-0">
         <p className="font-medium text-white text-sm">{item.room.descricao}</p>
         <p className="text-gray-300 text-xs">
-          {item.adults} adulto(s)
-          {item.hasChildren && ` + ${item.childrenCount} criança(s)`}
+          {item.adults} adulto(s){childrenInfo}
         </p>
         <p className="text-white font-semibold text-sm">
           {formatCurrency(roomTotal)}
@@ -76,6 +85,19 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
       cliente: customerName,
     });
 
+    // Monta o resumo das acomodações com idades das crianças
+    const roomsSummary = cart.map((item, i) => {
+      let childrenInfo = '';
+      if (item.hasChildren) {
+        if (item.childrenCount === 1) {
+          childrenInfo = ` + 1 criança (${item.childAge1} anos)`;
+        } else if (item.childrenCount === 2) {
+          childrenInfo = ` + 2 crianças (${item.childAge1} e ${item.childAge2} anos)`;
+        }
+      }
+      return `${i + 1}. ${item.room.descricao} - ${item.adults} adulto(s)${childrenInfo}`;
+    }).join('\n');
+
     const message = `
 *SOLICITAÇÃO DE RESERVA - HOTEL GRANJA BRASIL*
 
@@ -85,9 +107,7 @@ export const FinalQuote: React.FC<FinalQuoteProps> = ({ onBack }) => {
 *Noites:* ${nights}
 
 *Resumo das acomodações:*
-${cart.map((item, i) => 
-  `${i+1}. ${item.room.descricao} - ${item.adults} adulto(s)${item.hasChildren ? ` + ${item.childrenCount} criança(s)` : ''}`
-).join('\n')}
+${roomsSummary}
 
 *Valores:*
 - Subtotal acomodações: ${formatCurrency(subtotal)}
@@ -95,7 +115,6 @@ ${cart.map((item, i) =>
 - *TOTAL: ${formatCurrency(total)}*
 
 Cliente interessado em fechar a reserva.
-Aguardamos retorno para confirmação.
     `.trim();
 
     const encoded = encodeURIComponent(message);
