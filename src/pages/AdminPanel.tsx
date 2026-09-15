@@ -109,6 +109,18 @@ const getBrasiliaDateStr = (rawInput: any): { dateStr: string; ms: number } | nu
   };
 };
 
+// 🔥 CORREÇÃO: deduplicação defensiva no cliente (o worker também deduplica).
+// Protege contra retries/StrictMode que gerem eventos idênticos.
+const dedupeEvents = (events: TrackingEvent[]): TrackingEvent[] => {
+  const seen = new Set<string>();
+  return events.filter((ev) => {
+    const key = `${ev.sessionId}|${ev.event}|${JSON.stringify(ev.data ?? {})}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 export const AdminPanel: React.FC = () => {
   const [filtered, setFiltered] = useState<Conversation[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -196,43 +208,34 @@ export const AdminPanel: React.FC = () => {
   };
 
   // ========= BUSCAR TRACKING =========
+  // 🔥 CORREÇÃO: removida a dependência de `trackingEvents` do useCallback.
+  // Antes, a closure ficava presa a um valor antigo e sobrescrevia eventos novos,
+  // o que também contribuía para a contagem "diminuir" durante refresh.
   const fetchTrackingStats = useCallback(async () => {
     try {
       const res = await fetch(`${WORKER_URL}/tracking-stats`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.events) {
-          const currentStr = JSON.stringify(trackingEvents);
-          const newStr = JSON.stringify(data.events);
-          if (currentStr !== newStr) {
-            setTrackingStats(data.stats);
-            setTrackingEvents(data.events);
-          }
+          setTrackingStats(data.stats);
+          setTrackingEvents(dedupeEvents(data.events));
           return;
         }
       }
       const localData = getLocalTrackingStats();
       if (localData) {
-        const currentStr = JSON.stringify(trackingEvents);
-        const newStr = JSON.stringify(localData.events);
-        if (currentStr !== newStr) {
-          setTrackingStats(localData.stats);
-          setTrackingEvents(localData.events);
-        }
+        setTrackingStats(localData.stats);
+        setTrackingEvents(dedupeEvents(localData.events));
       }
     } catch (e) {
       console.warn('Erro ao buscar tracking do servidor:', e);
       const localData = getLocalTrackingStats();
       if (localData) {
-        const currentStr = JSON.stringify(trackingEvents);
-        const newStr = JSON.stringify(localData.events);
-        if (currentStr !== newStr) {
-          setTrackingStats(localData.stats);
-          setTrackingEvents(localData.events);
-        }
+        setTrackingStats(localData.stats);
+        setTrackingEvents(dedupeEvents(localData.events));
       }
     }
-  }, [trackingEvents]);
+  }, []);
 
   const parseConversations = (docs: any[]): Conversation[] => {
     return docs
@@ -359,7 +362,9 @@ export const AdminPanel: React.FC = () => {
           detail = ev.data.context;
         }
 
-        const parsedDate = normalizeDate(ev.timestamp);
+        // 🔥 CORREÇÃO: usa getDateFromEvent (que tem fallback para o sessionId)
+        // em vez de normalizeDate direto no timestamp.
+        const parsedDate = getDateFromEvent(ev);
         const dateFormatted = parsedDate
           ? parsedDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
           : 'Data Indisponivel';
@@ -447,7 +452,6 @@ export const AdminPanel: React.FC = () => {
             );
           }
 
-          // Agrupa por data de check-in
           const freqMap: Record<string, { checkin: string; checkout: string; adultos: number; criancas: number; count: number }> = {};
 
           consultas.forEach(ev => {
@@ -462,7 +466,6 @@ export const AdminPanel: React.FC = () => {
 
           const freqArray = Object.values(freqMap).sort((a, b) => b.count - a.count);
 
-          // Determina o mês com mais buscas
           const allDates = consultas.map(ev => ev.data.checkin).filter(Boolean);
           const monthCount: Record<string, number> = {};
           allDates.forEach(d => {
@@ -539,7 +542,6 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
 
-              {/* Tabela de Frequência */}
               <div>
                 <h3 className="text-md font-semibold text-slate-700 mb-2">📋 Tabela de Frequência por Data de Check‑in</h3>
                 <div className="overflow-x-auto">
@@ -581,7 +583,6 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
 
-              {/* Mapa de Calor (Calendário) */}
               <div>
                 <h3 className="text-md font-semibold text-slate-700 mb-2">
                   🗓️ Mapa de Calor – {monthName} de {year}
