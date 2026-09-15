@@ -149,6 +149,9 @@ export const AdminPanel: React.FC = () => {
     todayBrasilia ? todayBrasilia.dateStr : new Date().toISOString().split('T')[0]
   );
 
+  // 🔥 NOVO: mês exibido no mapa de calor (formato "YYYY-MM"). Vazio = usa o mês mais quente.
+  const [heatmapMonth, setHeatmapMonth] = useState<string>('');
+
   // ========= BUSCAR CONVERSAS =========
   const fetchConversations = async () => {
     try {
@@ -209,8 +212,6 @@ export const AdminPanel: React.FC = () => {
 
   // ========= BUSCAR TRACKING =========
   // 🔥 CORREÇÃO: removida a dependência de `trackingEvents` do useCallback.
-  // Antes, a closure ficava presa a um valor antigo e sobrescrevia eventos novos,
-  // o que também contribuía para a contagem "diminuir" durante refresh.
   const fetchTrackingStats = useCallback(async () => {
     try {
       const res = await fetch(`${WORKER_URL}/tracking-stats`);
@@ -362,8 +363,7 @@ export const AdminPanel: React.FC = () => {
           detail = ev.data.context;
         }
 
-        // 🔥 CORREÇÃO: usa getDateFromEvent (que tem fallback para o sessionId)
-        // em vez de normalizeDate direto no timestamp.
+        // 🔥 CORREÇÃO: usa getDateFromEvent (que tem fallback para o sessionId).
         const parsedDate = getDateFromEvent(ev);
         const dateFormatted = parsedDate
           ? parsedDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
@@ -492,7 +492,22 @@ export const AdminPanel: React.FC = () => {
             busiestMonth = `${year}-${month}`;
           }
 
-          const [year, month] = busiestMonth.split('-').map(Number);
+          // 🔥 NOVO: lista de meses disponíveis para o seletor.
+          // Inclui todos os meses com consultas registradas + o mês selecionado manualmente
+          // (para o caso de o usuário estar vendo um mês que ainda não tem dados no refresh atual).
+          const monthNamesFull = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+          const monthKeysSet = new Set(Object.keys(monthCount));
+          if (heatmapMonth && /^\d{4}-\d{2}$/.test(heatmapMonth)) {
+            monthKeysSet.add(heatmapMonth);
+          }
+          const availableMonths = Array.from(monthKeysSet).sort().reverse();
+
+          // 🔥 NOVO: define o mês efetivamente exibido.
+          // Se o usuário escolheu um mês no seletor, respeita; senão, cai no mês mais quente.
+          const displayedMonth =
+            heatmapMonth && monthKeysSet.has(heatmapMonth) ? heatmapMonth : busiestMonth;
+
+          const [year, month] = displayedMonth.split('-').map(Number);
           const firstDay = new Date(year, month - 1, 1).getDay();
           const daysInMonth = new Date(year, month, 0).getDate();
 
@@ -542,6 +557,7 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
 
+              {/* Tabela de Frequência */}
               <div>
                 <h3 className="text-md font-semibold text-slate-700 mb-2">📋 Tabela de Frequência por Data de Check‑in</h3>
                 <div className="overflow-x-auto">
@@ -583,10 +599,31 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
 
+              {/* Mapa de Calor (Calendário) */}
               <div>
-                <h3 className="text-md font-semibold text-slate-700 mb-2">
-                  🗓️ Mapa de Calor – {monthName} de {year}
-                </h3>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+                  <h3 className="text-md font-semibold text-slate-700">
+                    🗓️ Mapa de Calor – {monthName} de {year}
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-500 font-medium">Mês:</label>
+                    <select
+                      value={displayedMonth}
+                      onChange={(e) => setHeatmapMonth(e.target.value)}
+                      className="text-xs bg-white border border-slate-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-slate-700 shadow-sm"
+                    >
+                      {availableMonths.map((ym) => {
+                        const [y, m] = ym.split('-').map(Number);
+                        const count = monthCount[ym] || 0;
+                        return (
+                          <option key={ym} value={ym}>
+                            {monthNamesFull[m - 1]} de {y} · {count} busca{count === 1 ? '' : 's'}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </div>
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
                   <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-slate-500 mb-1">
                     <div>Dom</div>
