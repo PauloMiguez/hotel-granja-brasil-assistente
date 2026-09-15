@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Room, Reservation, AvailabilityResponse } from '../../types';
 import { formatCurrency } from '../../utils/currencyUtils';
 import { getDatesBetween } from '../../utils/dateUtils';
-import { VideoModal } from '../VideoModal/VideoModal';
 import { Button } from '../Shared/Button';
 
 interface RoomSelectorProps {
@@ -34,8 +33,6 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   // Estado para seleção (se a categoria está selecionada ou não)
   const [selected, setSelected] = useState<Record<string, boolean>>({});
-  const [videoOpen, setVideoOpen] = useState(false);
-  const [videoSrc, setVideoSrc] = useState('');
   const addButtonRef = useRef<HTMLDivElement>(null);
 
   const payingChildren = (hasChildren ? (childAge1 > 6 ? 1 : 0) + (childrenCount === 2 && childAge2 > 6 ? 1 : 0) : 0);
@@ -139,20 +136,11 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
     }
   };
 
-  const getVideoFileName = (descricao: string): string => {
-    const lower = descricao.toLowerCase();
-    if (lower.includes('apartamento superior')) return '/videos/Apartamento Superior.mp4';
-    if (lower.includes('suite senior') || lower.includes('suíte sênior')) return '/videos/Suíte Sênior.mp4';
-    if (lower.includes('suite master') || lower.includes('suíte master') || lower.includes('cobertura')) return '/videos/Suíte Máster.mp4';
-    return '';
-  };
-
   return (
     <div className="mt-4 border-t pt-4">
       <h4 className="font-semibold text-[#075e54] mb-3">Selecione as acomodações:</h4>
       <div className="space-y-2 max-h-60 overflow-y-auto">
         {rooms.map(room => {
-          const videoFile = getVideoFileName(room.descricao);
           const availableQty = getAvailableQuantity(room.codigo);
           const isDisabled = availableQty <= 0;
           const isSelected = selected[room.codigo] || false;
@@ -176,18 +164,6 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
                     {availableQty} unidade{availableQty > 1 ? 's' : ''} disponível(is)
                   </span>
                 </div>
-                {videoFile && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setVideoSrc(videoFile);
-                      setVideoOpen(true);
-                    }}
-                    className="text-xs text-[#075e54] underline mt-1"
-                  >
-                    ▶ Ver vídeo
-                  </button>
-                )}
               </div>
 
               {/* Seletor de quantidade (+ e -) */}
@@ -223,8 +199,6 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
           </Button>
         </div>
       )}
-
-      <VideoModal isOpen={videoOpen} onClose={() => setVideoOpen(false)} videoSrc={videoSrc} />
     </div>
   );
 };
