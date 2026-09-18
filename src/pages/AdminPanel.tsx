@@ -131,7 +131,6 @@ const agruparSessoes = (eventos: TrackingEvent[]): SessaoAgrupada[] => {
     const conf = ordenados.find(e => e.event === 'reserva_confirmada');
     const perd = ordenados.find(e => e.event === 'reserva_perdida');
 
-    // Se ambas existirem, vale a mais recente
     let statusFinal: 'confirmada' | 'perdida' | 'pendente' = 'pendente';
     if (conf && perd) {
       const msC = getDateFromEvent(conf)?.getTime() || 0;
@@ -261,16 +260,33 @@ const gerarFilaRecuperacao = (sessoes: SessaoAgrupada[], ticketMedio: number) =>
     .sort((a, b) => b.score - a.score);
 };
 
+// ========= STATS DERIVADOS DAS SESSÕES ÚNICAS =========
+const calcularStatsDerivados = (sessoes: SessaoAgrupada[]): TrackingStats => {
+  const s: TrackingStats = {
+    consultas: 0, sucesso: 0, vazias: 0, carrinho: 0,
+    orcamento: 0, whatsapp: 0, abandono: 0, reservas: 0, perdas: 0,
+  };
+  sessoes.forEach(sessao => {
+    const evs = sessao.eventos;
+    if (evs.some(e => e.event === 'consulta_iniciada')) s.consultas++;
+    if (evs.some(e => e.event === 'consulta_sucesso')) s.sucesso++;
+    if (evs.some(e => e.event === 'consulta_vazia')) s.vazias++;
+    if (evs.some(e => e.event === 'carrinho_adicionado')) s.carrinho++;
+    if (evs.some(e => e.event === 'orcamento_visualizado')) s.orcamento++;
+    if (evs.some(e => e.event === 'whatsapp_enviado')) s.whatsapp++;
+    if (evs.some(e => e.event === 'abandono')) s.abandono++;
+    if (sessao.statusFinal === 'confirmada') s.reservas = (s.reservas || 0) + 1;
+    if (sessao.statusFinal === 'perdida') s.perdas = (s.perdas || 0) + 1;
+  });
+  return s;
+};
+
 // ========= COMPONENTE PRINCIPAL =========
 export const AdminPanel: React.FC = () => {
   const [filtered, setFiltered] = useState<Conversation[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
   const [stats, setStats] = useState({ total: 0, msgs: 0, today: 0, avg: 0 });
-  const [trackingStats, setTrackingStats] = useState<TrackingStats>({
-    consultas: 0, sucesso: 0, vazias: 0, carrinho: 0, orcamento: 0,
-    whatsapp: 0, abandono: 0, reservas: 0, perdas: 0,
-  });
   const [trackingEvents, setTrackingEvents] = useState<TrackingEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -286,10 +302,8 @@ export const AdminPanel: React.FC = () => {
   );
   const [heatmapMonth, setHeatmapMonth] = useState<string>('');
 
-  // 🔥 NOVO: modo de visualização das jornadas
   const [viewMode, setViewMode] = useState<'lista' | 'kanban'>('lista');
 
-  // 🔥 NOVO: modal de status de reserva
   const [reservaModal, setReservaModal] = useState<{
     sessionId: string; acao: 'confirmar' | 'perder'; valor: number;
   } | null>(null);
@@ -298,7 +312,6 @@ export const AdminPanel: React.FC = () => {
   });
   const [salvandoStatus, setSalvandoStatus] = useState(false);
 
-  // 🔥 NOVO: ocupação real via API
   const [ocupacao, setOcupacao] = useState<OcupacaoDiaria[]>([]);
   const [loadingOcupacao, setLoadingOcupacao] = useState(false);
   const [ocupacaoRange, setOcupacaoRange] = useState<{ start: string; end: string } | null>(null);
@@ -352,28 +365,25 @@ export const AdminPanel: React.FC = () => {
     finally { setLoadingConv(false); }
   };
 
-  // ========= FETCH TRACKING =========
+  // ========= FETCH TRACKING (apenas eventos) =========
   const fetchTrackingStats = useCallback(async () => {
     try {
       const res = await fetch(`${WORKER_URL}/tracking-stats`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.events) {
-          setTrackingStats(data.stats);
           setTrackingEvents(dedupeEvents(data.events));
           return;
         }
       }
       const localData = getLocalTrackingStats();
       if (localData) {
-        setTrackingStats(localData.stats);
         setTrackingEvents(dedupeEvents(localData.events));
       }
     } catch (e) {
       console.warn('Erro ao buscar tracking do servidor:', e);
       const localData = getLocalTrackingStats();
       if (localData) {
-        setTrackingStats(localData.stats);
         setTrackingEvents(dedupeEvents(localData.events));
       }
     }
@@ -440,24 +450,7 @@ export const AdminPanel: React.FC = () => {
       if (!data) return null;
       const history = JSON.parse(data);
       if (!Array.isArray(history)) return null;
-      const stats: TrackingStats = {
-        consultas: 0, sucesso: 0, vazias: 0, carrinho: 0,
-        orcamento: 0, whatsapp: 0, abandono: 0, reservas: 0, perdas: 0,
-      };
-      history.forEach((ev: any) => {
-        switch (ev.event) {
-          case 'consulta_iniciada': stats.consultas++; break;
-          case 'consulta_sucesso': stats.sucesso++; break;
-          case 'consulta_vazia': stats.vazias++; break;
-          case 'carrinho_adicionado': stats.carrinho++; break;
-          case 'orcamento_visualizado': stats.orcamento++; break;
-          case 'whatsapp_enviado': stats.whatsapp++; break;
-          case 'abandono': stats.abandono++; break;
-          case 'reserva_confirmada': stats.reservas = (stats.reservas || 0) + 1; break;
-          case 'reserva_perdida': stats.perdas = (stats.perdas || 0) + 1; break;
-        }
-      });
-      return { stats, events: history.slice(-30).reverse() };
+      return { events: history.slice(-200).reverse() };
     } catch { return null; }
   };
 
@@ -506,7 +499,6 @@ export const AdminPanel: React.FC = () => {
     loadData();
   }, []);
 
-  // Carrega ocupação quando montar (próximos 60 dias)
   useEffect(() => {
     const hoje = new Date();
     const fim = new Date();
@@ -567,6 +559,9 @@ export const AdminPanel: React.FC = () => {
   // ========= MÉTRICAS DERIVADAS =========
   const sessoes = useMemo(() => agruparSessoes(trackingEvents), [trackingEvents]);
 
+  // 🔥 STATS DERIVADOS (estáveis, sem oscilação)
+  const trackingStats = useMemo(() => calcularStatsDerivados(sessoes), [sessoes]);
+
   const ticketMedio = useMemo(() => {
     const confirmadas = sessoes.filter(s => s.statusFinal === 'confirmada');
     if (!confirmadas.length) return 0;
@@ -608,7 +603,6 @@ export const AdminPanel: React.FC = () => {
   const leadTimeData = useMemo(() => analisarLeadTime(sessoes), [sessoes]);
   const filaRecuperacao = useMemo(() => gerarFilaRecuperacao(sessoes, ticketMedio), [sessoes, ticketMedio]);
 
-  // 🔥 NOVO: alerta de sessões pendentes há mais de 48h com WhatsApp
   const pendenciasAntigas = useMemo(() => {
     const agora = Date.now();
     return sessoes.filter(s => {
@@ -644,7 +638,6 @@ export const AdminPanel: React.FC = () => {
         </div>
       </header>
 
-      {/* 🔥 ALERTA DE PENDÊNCIAS */}
       {pendenciasAntigas.length > 0 && (
         <div className="bg-amber-50 border-l-4 border-amber-500 p-3 mb-4 rounded-r-lg flex justify-between items-center flex-wrap gap-2">
           <span className="text-sm text-amber-900">
@@ -662,7 +655,6 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {/* KPIs GERAIS */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Conversas" value={stats.total} />
         <StatCard label="Mensagens" value={stats.msgs.toLocaleString()} />
@@ -670,7 +662,6 @@ export const AdminPanel: React.FC = () => {
         <StatCard label="Média" value={stats.avg.toFixed(1)} suffix=" msg/conv" />
       </div>
 
-      {/* 🔥 KPIs DE NEGÓCIO */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">💰 Resultado Comercial</h2>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
         <div className="bg-white rounded-lg shadow p-4 border-l-4 border-emerald-500">
@@ -697,7 +688,6 @@ export const AdminPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* FUNIL */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📈 Funil de Conversão</h2>
       <div className="bg-white rounded-lg shadow p-4 mb-6">
         <div className="flex justify-between items-center mb-2">
@@ -720,7 +710,6 @@ export const AdminPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* 🔥 OCUPAÇÃO REAL */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📊 Demanda × Ocupação × Preço</h2>
       <div className="bg-white rounded-lg shadow p-4 mb-6">
         {loadingOcupacao ? (
@@ -735,7 +724,6 @@ export const AdminPanel: React.FC = () => {
         )}
       </div>
 
-      {/* 🔥 ANÁLISE POR LEAD TIME */}
       {leadTimeData.length > 0 && (
         <>
           <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">⏱️ Análise por Antecedência</h2>
@@ -771,7 +759,6 @@ export const AdminPanel: React.FC = () => {
         </>
       )}
 
-      {/* 🔥 ABANDONO POR FAIXA DE VALOR */}
       {abandonoPorValor.length > 0 && (
         <>
           <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">💸 Abandono por Faixa de Preço</h2>
@@ -804,7 +791,6 @@ export const AdminPanel: React.FC = () => {
         </>
       )}
 
-      {/* MAPA DE CALOR (mantido integral) */}
       <div className="mb-8">
         <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📊 Mapa de Calor de Buscas</h2>
         {(() => {
@@ -974,7 +960,6 @@ export const AdminPanel: React.FC = () => {
         })()}
       </div>
 
-      {/* 🔥 FILA DE RECUPERAÇÃO */}
       <div id="fila-recuperacao" className="mb-8">
         <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">
           🔔 Fila de Recuperação
@@ -1040,7 +1025,6 @@ export const AdminPanel: React.FC = () => {
         )}
       </div>
 
-      {/* JORNADAS */}
       <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-2 mb-4 gap-2">
         <h2 className="text-xl font-semibold text-[#1e293b]">🧑‍💻 Jornadas dos Clientes</h2>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1236,7 +1220,6 @@ export const AdminPanel: React.FC = () => {
                           })}
                         </div>
 
-                        {/* 🔥 BOTÕES DE STATUS DE RESERVA */}
                         {eventos.some(e => e.event === 'whatsapp_enviado') && statusFinal === 'pendente' && (
                           <div className="flex gap-2 pt-2 border-t border-slate-100">
                             <button
@@ -1283,7 +1266,6 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {/* CONVERSAS */}
       <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
@@ -1323,7 +1305,6 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL CONVERSA */}
       {selectedConvId && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden border border-slate-100">
@@ -1366,7 +1347,6 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {/* 🔥 MODAL DE STATUS DE RESERVA */}
       {reservaModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-100">
@@ -1558,7 +1538,6 @@ const OcupacaoTable: React.FC<{
   ocupacao: OcupacaoDiaria[];
   sessoes: SessaoAgrupada[];
 }> = ({ ocupacao, sessoes }) => {
-  // conta buscas por checkin
   const buscasPorData: Record<string, number> = {};
   sessoes.forEach(s => {
     const c = s.eventos.find(e => e.event === 'consulta_iniciada');
