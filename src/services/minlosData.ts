@@ -112,7 +112,11 @@ export const MINLOS_DATA: Record<string, number> = {
   "01/11/2027": 3,
   "02/11/2027": 3,
 
-  "06/11/2027": 2,
+  //Rock The Mountain - 05 a 08/11/2027 - 03 noites
+  "05/11/2027": 3,
+  "06/11/2027": 3,
+  "07/11/2027": 3,
+  "08/11/2027": 3,
 
   // Proclamação da República - 12 a 15/11/2027 - 03 noites
   "12/11/2027": 3,
