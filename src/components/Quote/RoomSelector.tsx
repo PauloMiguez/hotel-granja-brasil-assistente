@@ -120,7 +120,9 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
               childAge1,
               childAge2,
               extraGuests,
-              totalPerNight: room.valorMedio + extraGuests * 102,
+              // 🔥 CORREÇÃO: armazena o valor da diária SEM o extra.
+              // O extra será calculado e exibido separadamente no FinalQuote.
+              totalPerNight: room.valorMedio,
             });
           }
         }
@@ -142,7 +144,8 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
           const isDisabled = availableQty <= 0;
           const isSelected = selected[room.codigo] || false;
           const qty = quantities[room.codigo] || 0;
-          const totalPerNight = room.valorMedio + extraGuests * 102;
+          // Exibe o valor da diária + extra (apenas para exibição ao usuário)
+          const displayPerNight = room.valorMedio + extraGuests * 102;
 
           return (
             <div
@@ -155,7 +158,7 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium text-sm">{room.descricao}</span>
                   <span className="text-xs bg-[#e8f5e9] text-[#075e54] px-2 py-0.5 rounded-full">
-                    {formatCurrency(totalPerNight)}/noite
+                    {formatCurrency(displayPerNight)}/noite
                   </span>
                   <span className="text-xs text-gray-500">
                     {availableQty} unidade{availableQty > 1 ? 's' : ''} disponível(is)
