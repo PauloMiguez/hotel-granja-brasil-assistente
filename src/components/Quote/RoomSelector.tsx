@@ -33,10 +33,12 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const addButtonRef = useRef<HTMLDivElement>(null);
 
+  // Conta crianças pagantes (idade > 6 anos)
   const payingChildren = (hasChildren ? (childAge1 > 6 ? 1 : 0) + (childrenCount === 2 && childAge2 > 6 ? 1 : 0) : 0);
-  // 🔥 CORREÇÃO: a tarifa da API já considera o acréscimo para adultos extras.
-  // O acréscimo de R$ 102/dia é aplicado apenas para crianças acima de 6 anos.
-  const extraGuests = payingChildren;
+  // Total de hóspedes pagantes (adultos + crianças > 6 anos)
+  const payingGuests = adults + payingChildren;
+  // Hóspedes extras = pagantes acima de 2 (base já cobre 2 hóspedes)
+  const extraGuests = Math.max(0, payingGuests - 2);
   const dates = getDatesBetween(startDate, endDate);
 
   const totalSelected = Object.values(quantities).reduce((a, b) => a + b, 0);
