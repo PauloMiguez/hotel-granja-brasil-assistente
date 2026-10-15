@@ -93,7 +93,6 @@ export const CartSummary: React.FC<CartSummaryProps> = ({ onAddMore, onFinalize 
           const itemNights = calculateNights(item.startDate, item.endDate);
           const roomBaseTotal = item.totalPerNight * itemNights;
           const extraGuestCost = item.extraGuests * 102 * itemNights;
-          const itemTotal = roomBaseTotal + extraGuestCost;
 
           subtotal += roomBaseTotal;
           totalExtraGuests += extraGuestCost;
