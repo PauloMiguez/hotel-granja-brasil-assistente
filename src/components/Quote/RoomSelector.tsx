@@ -29,18 +29,16 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
   availability,
   onAddToCart,
 }) => {
-  // Estado para quantidade por categoria (usando codigo como chave)
   const [quantities, setQuantities] = useState<Record<string, number>>({});
-  // Estado para seleção (se a categoria está selecionada ou não)
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const addButtonRef = useRef<HTMLDivElement>(null);
 
   const payingChildren = (hasChildren ? (childAge1 > 6 ? 1 : 0) + (childrenCount === 2 && childAge2 > 6 ? 1 : 0) : 0);
-  const totalGuests = adults + payingChildren;
-  const extraGuests = Math.max(0, totalGuests - 2);
+  // 🔥 CORREÇÃO: a tarifa da API já considera o acréscimo para adultos extras.
+  // O acréscimo de R$ 102/dia é aplicado apenas para crianças acima de 6 anos.
+  const extraGuests = payingChildren;
   const dates = getDatesBetween(startDate, endDate);
 
-  // ========= SCROLL AUTOMÁTICO PARA O BOTÃO QUANDO HOUVER QUANTIDADE SELECIONADA =========
   const totalSelected = Object.values(quantities).reduce((a, b) => a + b, 0);
 
   useEffect(() => {
@@ -71,11 +69,9 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
       ...prev,
       [roomCode]: !prev[roomCode],
     }));
-    // Se desmarcar, zera a quantidade
     if (selected[roomCode]) {
       setQuantities(prev => ({ ...prev, [roomCode]: 0 }));
     } else {
-      // Se selecionar, define quantidade mínima como 1 (se disponível)
       const maxQty = getAvailableQuantity(roomCode);
       if (maxQty > 0) {
         setQuantities(prev => ({ ...prev, [roomCode]: 1 }));
@@ -130,7 +126,6 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
     });
     if (reservations.length > 0) {
       onAddToCart(reservations);
-      // Resetar estados
       setQuantities({});
       setSelected({});
     }
@@ -166,7 +161,6 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
                 </div>
               </div>
 
-              {/* Seletor de quantidade (+ e -) */}
               {isSelected && (
                 <div className="flex items-center gap-3 ml-4" onClick={(e) => e.stopPropagation()}>
                   <button
@@ -191,7 +185,6 @@ export const RoomSelector: React.FC<RoomSelectorProps> = ({
         })}
       </div>
 
-      {/* Botão "Incluir no orçamento" com ref para scroll */}
       {totalSelected > 0 && (
         <div ref={addButtonRef} className="mt-4">
           <Button variant="primary" onClick={handleAddToCart} className="w-full">
