@@ -28,7 +28,7 @@ interface OcupacaoDiaria {
   porCategoria: { SUP: number; SEN: number; MAS: number };
 }
 
-// ========= NORMALIZAÇÃO DE DATA (MANTIDA) =========
+// ========= NORMALIZAÇÃO DE DATA =========
 const normalizeDate = (rawTimestamp: any): Date | null => {
   if (!rawTimestamp || rawTimestamp === 'Data Indisponivel') return null;
   if (rawTimestamp instanceof Date) return isNaN(rawTimestamp.getTime()) ? null : rawTimestamp;
@@ -100,7 +100,7 @@ const formatCurrency = (v: number) =>
 
 const EVENTOS_IGNORADOS = ['teste_final', 'diagnostico', 'teste'];
 
-// ========= LÓGICAS DE NEGÓCIO (MANTIDAS) =========
+// ========= AGRUPAMENTO DE SESSÕES =========
 const agruparSessoes = (eventos: TrackingEvent[]): SessaoAgrupada[] => {
   const validos = eventos.filter(ev => !EVENTOS_IGNORADOS.includes(ev.event));
   const map: Record<string, TrackingEvent[]> = {};
@@ -146,6 +146,7 @@ const agruparSessoes = (eventos: TrackingEvent[]): SessaoAgrupada[] => {
   });
 };
 
+// ========= LEAD SCORE =========
 const calcularLeadScore = (s: SessaoAgrupada, ticketMedio: number): number => {
   const etapas = ['consulta_iniciada', 'consulta_sucesso', 'carrinho_adicionado', 'orcamento_visualizado', 'whatsapp_enviado'];
   const ultimo = s.ultimoEvento;
@@ -170,37 +171,66 @@ const calcularLeadScore = (s: SessaoAgrupada, ticketMedio: number): number => {
   );
 };
 
+// ========= ABANDONO POR FAIXA DE VALOR (universo = carrinho) =========
 const analisarAbandonoPorValor = (sessoes: SessaoAgrupada[]) => {
   const bins = [
-    { min: 0, max: 500, label: 'R$ 0–500' },
+    { min: 1, max: 500, label: 'R$ 1–500' },
     { min: 500, max: 800, label: 'R$ 500–800' },
     { min: 800, max: 1100, label: 'R$ 800–1.100' },
     { min: 1100, max: 1500, label: 'R$ 1.100–1.500' },
     { min: 1500, max: Infinity, label: 'R$ 1.500+' },
   ];
 
-  return bins.map(bin => {
-    const relevantes = sessoes.filter(s => {
-      const orc = s.eventos.find(e => e.event === 'orcamento_visualizado');
-      if (!orc) return false;
-      const v = Number(orc.data?.total || 0);
-      return v >= bin.min && v < bin.max;
-    });
+  const comCarrinho = sessoes.filter(s =>
+    s.eventos.some(e => e.event === 'carrinho_adicionado')
+  );
+  const comValor = comCarrinho.filter(s => s.valorCotado > 0);
+  const semValor = comCarrinho.filter(s => s.valorCotado === 0);
 
-    const comWhats = relevantes.filter(s => s.eventos.some(e => e.event === 'whatsapp_enviado')).length;
-    const confirmadas = relevantes.filter(s => s.statusFinal === 'confirmada').length;
-    const perdidas = relevantes.filter(s => s.statusFinal === 'perdida').length;
+  const construirBin = (
+    label: string,
+    min: number,
+    max: number,
+    sessoesDoBin: SessaoAgrupada[],
+  ) => {
+    const total = sessoesDoBin.length;
+    const comWhats = sessoesDoBin.filter(s =>
+      s.eventos.some(e => e.event === 'whatsapp_enviado')
+    ).length;
+    const abandonaram = total - comWhats;
+    const confirmadas = sessoesDoBin.filter(s => s.statusFinal === 'confirmada').length;
+    const perdidas = sessoesDoBin.filter(s => s.statusFinal === 'perdida').length;
 
     return {
-      ...bin,
-      total: relevantes.length,
-      taxaWhats: relevantes.length ? Math.round(comWhats / relevantes.length * 100) : 0,
-      taxaFech: relevantes.length ? Math.round(confirmadas / relevantes.length * 100) : 0,
-      taxaPerda: relevantes.length ? Math.round(perdidas / relevantes.length * 100) : 0,
+      label, min, max, total, comWhats,
+      taxaWhats: total ? Math.round((comWhats / total) * 100) : 0,
+      abandonaram,
+      taxaAbandono: total ? Math.round((abandonaram / total) * 100) : 0,
+      confirmadas,
+      taxaFech: total ? Math.round((confirmadas / total) * 100) : 0,
+      perdidas,
+      taxaPerda: total ? Math.round((perdidas / total) * 100) : 0,
     };
-  }).filter(b => b.total > 0);
+  };
+
+  const resultado = bins
+    .map(bin =>
+      construirBin(
+        bin.label,
+        bin.min,
+        bin.max,
+        comValor.filter(s => s.valorCotado >= bin.min && s.valorCotado < bin.max),
+      )
+    )
+    .filter(b => b.total > 0);
+
+  if (semValor.length > 0) {
+    resultado.push(construirBin('Sem orçamento visto', 0, 0, semValor));
+  }
+  return resultado;
 };
 
+// ========= LEAD TIME =========
 const analisarLeadTime = (sessoes: SessaoAgrupada[]) => {
   const bins = [
     { min: 0, max: 7, label: '0–7 dias' },
@@ -232,6 +262,7 @@ const analisarLeadTime = (sessoes: SessaoAgrupada[]) => {
   }).filter(b => b.buscas > 0);
 };
 
+// ========= FILA DE RECUPERAÇÃO =========
 const gerarFilaRecuperacao = (sessoes: SessaoAgrupada[], ticketMedio: number) => {
   const agora = Date.now();
   return sessoes
@@ -256,6 +287,7 @@ const gerarFilaRecuperacao = (sessoes: SessaoAgrupada[], ticketMedio: number) =>
     .sort((a, b) => b.score - a.score);
 };
 
+// ========= STATS DERIVADOS DAS SESSÕES ÚNICAS =========
 const calcularStatsDerivados = (sessoes: SessaoAgrupada[]): TrackingStats => {
   const s: TrackingStats = {
     consultas: 0, sucesso: 0, vazias: 0, carrinho: 0,
@@ -278,9 +310,6 @@ const calcularStatsDerivados = (sessoes: SessaoAgrupada[]): TrackingStats => {
 
 // ========= COMPONENTE PRINCIPAL =========
 export const AdminPanel: React.FC = () => {
-  // Aba ativa: 'revenue', 'crm', 'chat'
-  const [activeTab, setActiveTab] = useState<'revenue' | 'crm' | 'chat'>('revenue');
-
   const [filtered, setFiltered] = useState<Conversation[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
@@ -300,7 +329,7 @@ export const AdminPanel: React.FC = () => {
   );
   const [heatmapMonth, setHeatmapMonth] = useState<string>('');
 
-  const [viewMode, setViewMode] = useState<'lista' | 'kanban'>('kanban'); // Kanban como default no CRM
+  const [viewMode, setViewMode] = useState<'lista' | 'kanban'>('lista');
 
   const [reservaModal, setReservaModal] = useState<{
     sessionId: string; acao: 'confirmar' | 'perder'; valor: number;
@@ -314,9 +343,179 @@ export const AdminPanel: React.FC = () => {
   const [loadingOcupacao, setLoadingOcupacao] = useState(false);
   const [ocupacaoRange, setOcupacaoRange] = useState<{ start: string; end: string } | null>(null);
 
-  // Funcionalidades de Fetch omitidas para brevidade (São idênticas ao código original)
-  // Certifique-se de manter fetchConversations, handleViewConversation, fetchTrackingStats, fetchOcupacao, parseConversations, updateStats, marcarReserva, handleRefresh, exportCSV exatamente como estavam no seu código.
-  // ... [INCLUA AS FUNÇÕES DE FETCH E EXPORT DO SEU CÓDIGO ORIGINAL AQUI] ...
+  // ========= FETCH CONVERSAS =========
+  const fetchConversations = async () => {
+    try {
+      const res = await fetch(`${WORKER_URL}/conversas`);
+      const data = await res.json();
+      if (data.success) {
+        const convs = parseConversations(data.data || []);
+        setFiltered(convs);
+        updateStats(convs);
+      }
+    } catch (e) {
+      console.error(e);
+      setError('Erro ao carregar conversas');
+    }
+  };
+
+  const handleViewConversation = async (convId: string) => {
+    setSelectedConvId(convId);
+    setLoadingConv(true);
+    const conv = filtered.find(c => c.id === convId);
+    if (conv && conv.messages?.length) {
+      setConvMessages(conv.messages);
+      setLoadingConv(false);
+      return;
+    }
+    try {
+      const res = await fetch(`${WORKER_URL}/conversa?id=${encodeURIComponent(convId)}`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        const fields = data.data.fields || {};
+        let messages: Message[] = [];
+        if (fields.messages?.arrayValue?.values) {
+          messages = fields.messages.arrayValue.values
+            .map((v: any) => {
+              const mf = v.mapValue?.fields || {};
+              return {
+                role: mf.role?.stringValue || 'unknown',
+                content: mf.content?.stringValue || '',
+                timestamp: mf.timestamp?.timestampValue || '',
+              };
+            })
+            .filter((m: Message) => Boolean(m.content));
+        }
+        setConvMessages(messages);
+      } else setConvMessages([]);
+    } catch (e) { setConvMessages([]); }
+    finally { setLoadingConv(false); }
+  };
+
+  // ========= FETCH TRACKING (apenas eventos) =========
+  const fetchTrackingStats = useCallback(async () => {
+    try {
+      const res = await fetch(`${WORKER_URL}/tracking-stats`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.events) {
+          setTrackingEvents(dedupeEvents(data.events));
+          return;
+        }
+      }
+      const localData = getLocalTrackingStats();
+      if (localData) {
+        setTrackingEvents(dedupeEvents(localData.events));
+      }
+    } catch (e) {
+      console.warn('Erro ao buscar tracking do servidor:', e);
+      const localData = getLocalTrackingStats();
+      if (localData) {
+        setTrackingEvents(dedupeEvents(localData.events));
+      }
+    }
+  }, []);
+
+  // ========= FETCH OCUPAÇÃO =========
+  const fetchOcupacao = useCallback(async (start: Date, end: Date) => {
+    setLoadingOcupacao(true);
+    try {
+      const fmt = (d: Date) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      const s = fmt(start);
+      const e = fmt(end);
+      setOcupacaoRange({ start: s, end: e });
+      const res = await fetch(`${WORKER_URL}/ocupacao?start=${encodeURIComponent(s)}&end=${encodeURIComponent(e)}`);
+      const data = await res.json();
+      if (data.success) setOcupacao(data.diarias || []);
+    } catch (e) {
+      console.warn('Erro ao buscar ocupação:', e);
+    } finally {
+      setLoadingOcupacao(false);
+    }
+  }, []);
+
+  const parseConversations = (docs: any[]): Conversation[] => docs
+    .map((doc: any) => {
+      const f = doc.fields || {};
+      const id = f.conversation_id?.stringValue || doc.name?.split('/').pop() || 'N/A';
+      const msgs = Number(f.metadata?.mapValue?.fields?.total_messages?.integerValue) || 0;
+      const updatedField = f.metadata?.mapValue?.fields?.last_updated;
+      let updated = '';
+      if (updatedField) {
+        if (updatedField.timestampValue) updated = updatedField.timestampValue;
+        else if (updatedField.stringValue) updated = updatedField.stringValue;
+        else updated = updatedField.toString?.() || '';
+      }
+      const source = f.metadata?.mapValue?.fields?.source?.stringValue || 'chat_web';
+      let messages: Message[] = [];
+      if (f.messages?.arrayValue?.values) {
+        messages = f.messages.arrayValue.values.map((v: any) => {
+          const mf = v.mapValue?.fields || {};
+          return {
+            role: mf.role?.stringValue || 'unknown',
+            content: mf.content?.stringValue || '',
+            timestamp: mf.timestamp?.timestampValue || '',
+          };
+        }).filter((m: Message) => Boolean(m.content));
+      }
+      return { id, total_messages: msgs, last_updated: updated, source, messages };
+    })
+    .filter(c => c.id !== 'N/A');
+
+  const updateStats = (convs: Conversation[]) => {
+    const total = convs.length;
+    const msgs = convs.reduce((s, c) => s + (Number(c.total_messages) || 0), 0);
+    const todayStr = getBrasiliaDateStr(new Date());
+    const today = todayStr ? todayStr.dateStr : new Date().toISOString().split('T')[0];
+    const todayConvs = convs.filter(c => getBrasiliaDateStr(c.last_updated)?.dateStr === today).length;
+    setStats({ total, msgs, today: todayConvs, avg: total > 0 ? msgs / total : 0 });
+  };
+
+  const getLocalTrackingStats = () => {
+    try {
+      const data = localStorage.getItem('tracking_history');
+      if (!data) return null;
+      const history = JSON.parse(data);
+      if (!Array.isArray(history)) return null;
+      return { events: history.slice(-200).reverse() };
+    } catch { return null; }
+  };
+
+  // ========= POST /track para marcar reserva =========
+  const marcarReserva = async (
+    sessionId: string,
+    tipo: 'confirmada' | 'perdida',
+    dados: { valor?: number; categoria?: string; canal?: string; motivo?: string; valorCotado?: number }
+  ) => {
+    setSalvandoStatus(true);
+    try {
+      const evento = tipo === 'confirmada' ? 'reserva_confirmada' : 'reserva_perdida';
+      const payload = {
+        sessionId,
+        event: evento,
+        timestamp: new Date().toISOString(),
+        data: {
+          referencia_sessao: sessionId,
+          ...(tipo === 'confirmada'
+            ? { valor_final: dados.valor, categoria: dados.categoria, canal: dados.canal, valor_cotado: dados.valorCotado }
+            : { motivo: dados.motivo, valor_cotado: dados.valorCotado }),
+        },
+      };
+      const res = await fetch(`${WORKER_URL}/track`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('Falha ao salvar');
+      await fetchTrackingStats();
+      setReservaModal(null);
+    } catch (e) {
+      alert('Erro ao salvar status da reserva. Tente novamente.');
+      console.error(e);
+    } finally {
+      setSalvandoStatus(false);
+    }
+  };
 
   useEffect(() => {
     const loadData = async () => {
@@ -334,9 +533,59 @@ export const AdminPanel: React.FC = () => {
     fetchOcupacao(hoje, fim);
   }, [fetchOcupacao]);
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    const hoje = new Date();
+    const fim = new Date();
+    fim.setDate(fim.getDate() + 60);
+    await Promise.all([
+      fetchConversations(),
+      fetchTrackingStats(),
+      fetchOcupacao(hoje, fim),
+    ]);
+    setIsRefreshing(false);
+  };
 
-  // ========= MEMOS E CÁLCULOS =========
+  // ========= EXPORT CSV =========
+  const exportCSV = () => {
+    const headers = ['Sessao', 'Evento', 'Timestamp', 'Detalhes'];
+    const rows = trackingEvents
+      .filter(ev => !EVENTOS_IGNORADOS.includes(ev.event))
+      .map(ev => {
+        let detail = '';
+        if (ev.event === 'consulta_iniciada' && ev.data) {
+          detail = `Check-in: ${ev.data.checkin || '-'} | ${ev.data.checkout || '-'} | ${ev.data.adultos || 0} adulto(s)`;
+          if (ev.data.criancas) detail += ` + ${ev.data.criancas} criança(s)`;
+        } else if (ev.event === 'carrinho_adicionado' && ev.data) {
+          detail = `${ev.data.quantidade || 0} quarto(s)`;
+        } else if (ev.event === 'whatsapp_enviado' && ev.data) {
+          detail = `R$ ${ev.data.total || 0}`;
+        } else if (ev.event === 'reserva_confirmada' && ev.data) {
+          detail = `R$ ${ev.data.valor_final || 0} | ${ev.data.categoria || '-'} | ${ev.data.canal || '-'}`;
+        } else if (ev.event === 'reserva_perdida' && ev.data) {
+          detail = `Motivo: ${ev.data.motivo || '-'} | Cotado: R$ ${ev.data.valor_cotado || 0}`;
+        } else if (ev.data?.context) {
+          detail = ev.data.context;
+        }
+        const parsedDate = getDateFromEvent(ev);
+        const dateFormatted = parsedDate
+          ? parsedDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+          : 'Data Indisponivel';
+        return [ev.sessionId, ev.event, dateFormatted, `"${detail.replace(/"/g, '""')}"`];
+      });
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `tracking_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  // ========= MÉTRICAS DERIVADAS =========
   const sessoes = useMemo(() => agruparSessoes(trackingEvents), [trackingEvents]);
+
   const trackingStats = useMemo(() => calcularStatsDerivados(sessoes), [sessoes]);
 
   const ticketMedio = useMemo(() => {
@@ -363,7 +612,10 @@ export const AdminPanel: React.FC = () => {
       const last = s.eventos.find(e => e.event === 'reserva_confirmada');
       const msF = getDateFromEvent(first)?.getTime() || 0;
       const msL = getDateFromEvent(last!)?.getTime() || 0;
-      if (msF && msL) ciclos.push((msL - msF) / 86400000);
+      if (msF && msL) {
+        const diff = (msL - msF) / 86400000;
+        if (diff > 0) ciclos.push(diff);
+      }
     });
     const cicloMedio = ciclos.length ? ciclos.reduce((a, b) => a + b, 0) / ciclos.length : 0;
     return {
@@ -373,6 +625,7 @@ export const AdminPanel: React.FC = () => {
       taxa: whats.length ? Math.round(confirmadas.length / whats.length * 100) : 0,
       receita,
       cicloMedio,
+      cicloAmostra: ciclos.length,
     };
   }, [sessoes]);
 
@@ -380,8 +633,28 @@ export const AdminPanel: React.FC = () => {
   const leadTimeData = useMemo(() => analisarLeadTime(sessoes), [sessoes]);
   const filaRecuperacao = useMemo(() => gerarFilaRecuperacao(sessoes, ticketMedio), [sessoes, ticketMedio]);
 
+  // 🔥 Buscas por sessão (contagem alinhada com trackingStats.consultas).
+  // Cada sessão contribui com 1 busca, usando o checkin da ÚLTIMA consulta_iniciada.
+  const consultasPorSessao = useMemo(() => {
+    const resultado: TrackingEvent[] = [];
+    sessoes.forEach(s => {
+      const cs = s.eventos.filter(e => e.event === 'consulta_iniciada' && e.data?.checkin);
+      if (cs.length > 0) resultado.push(cs[cs.length - 1]);
+    });
+    return resultado;
+  }, [sessoes]);
+
+  const pendenciasAntigas = useMemo(() => {
+    const agora = Date.now();
+    return sessoes.filter(s => {
+      const temWhats = s.eventos.some(e => e.event === 'whatsapp_enviado');
+      const horas = (agora - s.lastTimestampMs) / 3600000;
+      return temWhats && s.statusFinal === 'pendente' && horas > 48;
+    });
+  }, [sessoes]);
+
   // ========= RENDER =========
-  if (loading) return <div className="flex h-screen items-center justify-center text-slate-500 font-semibold">Carregando RMS...</div>;
+  if (loading) return <div className="text-center p-8">Carregando...</div>;
   if (error) return <div className="text-red-600 p-8">{error}</div>;
 
   const conversionRate = trackingStats.consultas > 0
@@ -389,308 +662,1033 @@ export const AdminPanel: React.FC = () => {
     : 0;
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
-      {/* HEADER PRINCIPAL */}
-      <header className="bg-[#1e293b] text-white p-4 shadow-md sticky top-0 z-40">
-        <div className="container mx-auto max-w-7xl flex justify-between items-center flex-wrap gap-4">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight">Hotel Analytics & RMS</h1>
-            <span className="bg-indigo-500 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Beta</span>
-          </div>
-          
-          {/* NAVEGAÇÃO DE ABAS */}
-          <nav className="flex bg-slate-800/50 p-1 rounded-lg">
-            <button 
-              onClick={() => setActiveTab('revenue')}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'revenue' ? 'bg-indigo-500 text-white shadow' : 'text-slate-300 hover:text-white hover:bg-slate-700'}`}
-            >
-              📈 Revenue & Tarifas
-            </button>
-            <button 
-              onClick={() => setActiveTab('crm')}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'crm' ? 'bg-indigo-500 text-white shadow' : 'text-slate-300 hover:text-white hover:bg-slate-700'}`}
-            >
-              🎯 CRM & Vendas
-            </button>
-            <button 
-              onClick={() => setActiveTab('chat')}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'chat' ? 'bg-indigo-500 text-white shadow' : 'text-slate-300 hover:text-white hover:bg-slate-700'}`}
-            >
-              💬 Atendimento (IA)
-            </button>
-          </nav>
-
-          <div className="flex gap-2">
-            <button onClick={handleRefresh} disabled={isRefreshing} className="bg-white/10 px-3 py-1.5 text-sm rounded hover:bg-white/20 disabled:opacity-50">
-              {isRefreshing ? '🔄 Atualizando...' : '🔄 Atualizar'}
-            </button>
-            <button onClick={exportCSV} className="bg-white/10 px-3 py-1.5 text-sm rounded hover:bg-white/20">📥 CSV</button>
-          </div>
+    <div className="container mx-auto px-4 py-6 max-w-7xl">
+      <header className="bg-[#1e293b] text-white p-4 rounded-lg mb-4 flex justify-between items-center flex-wrap gap-3">
+        <h1 className="text-2xl font-bold">🏨 Painel Administrativo</h1>
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="bg-white/20 px-4 py-2 rounded hover:bg-white/30 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isRefreshing ? '🔄 Atualizando...' : '🔄 Atualizar'}
+          </button>
+          <button onClick={exportCSV} className="bg-white/20 px-4 py-2 rounded hover:bg-white/30">
+            📥 CSV
+          </button>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-6 max-w-7xl">
-        
-        {/* ================= ABA 1: REVENUE MANAGEMENT ================= */}
-        {activeTab === 'revenue' && (
-          <div className="space-y-6 animate-fadeIn">
-            
-            {/* ALERTS ENGINE (NOVO MÓDULO RMS) */}
-            <RevenueAlerts ocupacao={ocupacao} trackingEvents={trackingEvents} />
+      {pendenciasAntigas.length > 0 && (
+        <div className="bg-amber-50 border-l-4 border-amber-500 p-3 mb-4 rounded-r-lg flex justify-between items-center flex-wrap gap-2">
+          <span className="text-sm text-amber-900">
+            ⚠️ <strong>{pendenciasAntigas.length}</strong> sessão(ões) com WhatsApp enviado há mais de 48h sem status de reserva.
+          </span>
+          <button
+            onClick={() => {
+              const el = document.getElementById('fila-recuperacao');
+              el?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className="text-xs bg-amber-500 text-white px-3 py-1.5 rounded hover:bg-amber-600"
+          >
+            Ver fila
+          </button>
+        </div>
+      )}
 
-            {/* KPIs COMERCIAIS */}
-            <section>
-              <h2 className="text-lg font-bold text-slate-800 mb-3">Visão Geral de Receita</h2>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <KPICard title="Receita Gerada" value={formatCurrency(kpisFechamento.receita)} sub="Ciclo médio:" subValue={`${kpisFechamento.cicloMedio.toFixed(1)} dias`} color="emerald" />
-                <KPICard title="Ticket Médio (ADR)" value={formatCurrency(ticketMedio)} color="blue" />
-                <KPICard title="Reservas Fechadas" value={kpisFechamento.confirmadas} color="indigo" />
-                <KPICard title="Taxa de Fechamento" value={`${kpisFechamento.taxa}%`} sub="WhatsApp → Reserva" color="indigo" />
-                <KPICard title="Reservas Perdidas" value={kpisFechamento.perdidas} color="rose" />
-              </div>
-            </section>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Conversas" value={stats.total} />
+        <StatCard label="Mensagens" value={stats.msgs.toLocaleString()} />
+        <StatCard label="Hoje" value={stats.today} />
+        <StatCard label="Média" value={stats.avg.toFixed(1)} suffix=" msg/conv" />
+      </div>
 
-            {/* GESTÃO DE DISPONIBILIDADE E TARIFAS */}
-            <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-                <OcupacaoTable ocupacao={ocupacao} sessoes={sessoes} />
+      <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">💰 Resultado Comercial</h2>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-emerald-500">
+          <div className="text-2xl font-bold text-emerald-700">{kpisFechamento.confirmadas}</div>
+          <div className="text-xs text-gray-600">Reservas confirmadas</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-rose-500">
+          <div className="text-2xl font-bold text-rose-700">{kpisFechamento.perdidas}</div>
+          <div className="text-xs text-gray-600">Reservas perdidas</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-indigo-500">
+          <div className="text-2xl font-bold text-indigo-700">{kpisFechamento.taxa}%</div>
+          <div className="text-xs text-gray-600">Taxa de fechamento</div>
+          <div className="text-[10px] text-slate-400">WhatsApp → Reserva</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-500">
+          <div className="text-2xl font-bold text-yellow-700">{formatCurrency(ticketMedio)}</div>
+          <div className="text-xs text-gray-600">Ticket médio</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-emerald-700">
+          <div className="text-2xl font-bold text-emerald-700">{formatCurrency(kpisFechamento.receita)}</div>
+          <div className="text-xs text-gray-600">Receita total</div>
+          <div className="text-[10px] text-slate-400">
+            {kpisFechamento.cicloMedio > 0
+              ? `Ciclo médio: ${kpisFechamento.cicloMedio.toFixed(1)}d (${kpisFechamento.cicloAmostra})`
+              : 'Ciclo médio: —'}
+          </div>
+        </div>
+      </div>
+
+      <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📈 Funil de Conversão</h2>
+      <div className="bg-white rounded-lg shadow p-4 mb-6">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-sm text-gray-600">Taxa de conversão (consulta → WhatsApp)</span>
+          <span className="text-lg font-bold text-[#1e293b]">{conversionRate}%</span>
+        </div>
+        <div className="w-full bg-gray-200 rounded-full h-2.5">
+          <div className="bg-[#1e293b] h-2.5 rounded-full" style={{ width: `${Math.min(Number(conversionRate), 100)}%` }}></div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-9 gap-3 mt-4">
+          <TrackingCard label="Consultas" value={trackingStats.consultas} />
+          <TrackingCard label="Sucesso" value={trackingStats.sucesso} />
+          <TrackingCard label="Sem Disp." value={trackingStats.vazias} />
+          <TrackingCard label="Carrinho" value={trackingStats.carrinho} />
+          <TrackingCard label="Orçamento" value={trackingStats.orcamento} color="gold" />
+          <TrackingCard label="WhatsApp" value={trackingStats.whatsapp} color="gold" />
+          <TrackingCard label="Abandonos" value={trackingStats.abandono} color="red" />
+          <TrackingCard label="Reservas" value={trackingStats.reservas || 0} color="green" />
+          <TrackingCard label="Perdas" value={trackingStats.perdas || 0} color="red" />
+        </div>
+        <p className="text-[10px] text-slate-400 mt-3">
+          Todas as contagens acima são de <strong>sessões únicas</strong>. Consultas = sessões que iniciaram pelo menos 1 busca.
+        </p>
+      </div>
+
+      <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📊 Demanda × Ocupação × Preço</h2>
+      <div className="bg-white rounded-lg shadow p-4 mb-6">
+        {loadingOcupacao ? (
+          <div className="text-center py-6 text-slate-500 text-sm">Carregando dados de ocupação...</div>
+        ) : ocupacao.length === 0 ? (
+          <div className="text-center py-6 text-slate-500 text-sm">
+            Não foi possível carregar dados de ocupação da API.
+            {ocupacaoRange && <span className="block text-xs mt-1">Range: {ocupacaoRange.start} → {ocupacaoRange.end}</span>}
+          </div>
+        ) : (
+          <OcupacaoTable ocupacao={ocupacao} sessoes={sessoes} />
+        )}
+      </div>
+
+      {leadTimeData.length > 0 && (
+        <>
+          <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">⏱️ Análise por Antecedência</h2>
+          <div className="bg-white rounded-lg shadow p-4 mb-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-100 text-slate-700">
+                  <th className="px-3 py-2 text-left">Faixa (check-in − busca)</th>
+                  <th className="px-3 py-2 text-center">Buscas</th>
+                  <th className="px-3 py-2 text-center">Conversão WhatsApp</th>
+                  <th className="px-3 py-2 text-center">Taxa de Fechamento</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leadTimeData.map((row, i) => (
+                  <tr key={i} className="border-b border-slate-100">
+                    <td className="px-3 py-2 font-medium">{row.faixa}</td>
+                    <td className="px-3 py-2 text-center">{row.buscas}</td>
+                    <td className="px-3 py-2 text-center">
+                      <span className="text-indigo-700 font-semibold">{row.taxaWhats}%</span>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <span className="text-emerald-700 font-semibold">{row.taxaFech}%</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-xs text-slate-400 mt-3">
+              Leads com maior antecedência tendem a comparar mais. Leads próximos ao check-in decidem por urgência.
+            </p>
+          </div>
+        </>
+      )}
+
+      {abandonoPorValor.length > 0 && (
+        <>
+          <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">
+            💸 Abandono do Carrinho por Faixa de Preço
+          </h2>
+          <div className="bg-white rounded-lg shadow p-4 mb-6">
+            <div className="space-y-3">
+              {abandonoPorValor.map((bin, i) => {
+                const maxTotal = Math.max(...abandonoPorValor.map(b => b.total), 1);
+                const widthTotal = (bin.total / maxTotal) * 100;
+                const abandono = bin.taxaAbandono;
+                const cor =
+                  abandono >= 70 ? 'bg-red-600'
+                  : abandono >= 50 ? 'bg-orange-500'
+                  : abandono >= 30 ? 'bg-amber-400'
+                  : 'bg-emerald-500';
+                return (
+                  <div key={i}>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="font-medium">{bin.label}</span>
+                      <span className="text-slate-500">
+                        {bin.total} carrinho{bin.total === 1 ? '' : 's'} ·{' '}
+                        {bin.taxaWhats}% foram ao WhatsApp ·{' '}
+                        {abandono}% abandonaram
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-3">
+                      <div className={`h-3 rounded-full ${cor}`} style={{ width: `${widthTotal}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs text-slate-400 mt-4">
+              Universo: sessões que adicionaram uma acomodação ao carrinho. Abandono = não chegaram a enviar o pedido pelo WhatsApp. Faixa determinada pelo último valor visto (orçamento ou WhatsApp). Sessões que abandonaram antes de ver qualquer valor aparecem em "Sem orçamento visto".
+            </p>
+          </div>
+        </>
+      )}
+
+      <div className="mb-8">
+        <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📊 Mapa de Calor de Buscas</h2>
+        {(() => {
+          // 🔥 CORREÇÃO: usar sessões únicas (última consulta_iniciada de cada sessão)
+          // para alinhar com o card "Consultas" do funil.
+          const consultas = consultasPorSessao;
+          if (consultas.length === 0) {
+            return (
+              <div className="bg-white rounded-lg shadow p-6 text-center text-slate-500">
+                Nenhuma consulta de disponibilidade registrada ainda.
               </div>
-              <div className="space-y-6">
-                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-                  <h3 className="text-md font-bold text-slate-800 mb-4">⏱️ Booking Window (Antecedência)</h3>
-                  {leadTimeData.length > 0 ? (
-                    <table className="w-full text-sm">
-                      <tbody>
-                        {leadTimeData.map((row, i) => (
-                          <tr key={i} className="border-b border-slate-50 last:border-0">
-                            <td className="py-2 text-slate-600">{row.faixa}</td>
-                            <td className="py-2 text-right font-semibold">{row.buscas} buscas</td>
-                            <td className="py-2 text-right text-emerald-600">{row.taxaFech}% conv.</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : <p className="text-sm text-slate-400">Dados insuficientes</p>}
+            );
+          }
+          const freqMap: Record<string, { checkin: string; checkout: string; adultos: number; criancas: number; count: number }> = {};
+          consultas.forEach(ev => {
+            const { checkin, checkout, adultos = 0, criancas = 0 } = ev.data;
+            if (!checkin) return;
+            if (!freqMap[checkin]) freqMap[checkin] = { checkin, checkout, adultos, criancas, count: 0 };
+            freqMap[checkin].count += 1;
+          });
+          const freqArray = Object.values(freqMap).sort((a, b) => b.count - a.count);
+          const allDates = consultas.map(ev => ev.data.checkin).filter(Boolean);
+          const monthCount: Record<string, number> = {};
+          allDates.forEach((d: string) => {
+            const parts = d.split('-');
+            if (parts.length === 3) {
+              const k = `${parts[0]}-${parts[1]}`;
+              monthCount[k] = (monthCount[k] || 0) + 1;
+            }
+          });
+          let busiestMonth = '';
+          let maxCount = 0;
+          for (const [m, c] of Object.entries(monthCount)) {
+            if (c > maxCount) { maxCount = c; busiestMonth = m; }
+          }
+          if (!busiestMonth) {
+            const now = new Date();
+            busiestMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+          }
+          const monthNamesFull = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+          const monthKeysSet = new Set(Object.keys(monthCount));
+          if (heatmapMonth && /^\d{4}-\d{2}$/.test(heatmapMonth)) monthKeysSet.add(heatmapMonth);
+          const availableMonths = Array.from(monthKeysSet).sort().reverse();
+          const displayedMonth = heatmapMonth && monthKeysSet.has(heatmapMonth) ? heatmapMonth : busiestMonth;
+          const [year, month] = displayedMonth.split('-').map(Number);
+          const firstDay = new Date(year, month - 1, 1).getDay();
+          const daysInMonth = new Date(year, month, 0).getDate();
+          const dayFreq: Record<number, number> = {};
+          consultas.forEach(ev => {
+            const d = ev.data.checkin;
+            if (!d) return;
+            const [y, m, day] = d.split('-').map(Number);
+            if (y === year && m === month) dayFreq[day] = (dayFreq[day] || 0) + 1;
+          });
+          const maxFreq = Math.max(...Object.values(dayFreq), 1);
+          const getColor = (freq: number) => {
+            if (freq === 0) return 'bg-slate-100';
+            const i = Math.min(1, freq / maxFreq);
+            if (i <= 0.2) return 'bg-yellow-100';
+            if (i <= 0.4) return 'bg-yellow-300';
+            if (i <= 0.6) return 'bg-orange-300';
+            if (i <= 0.8) return 'bg-orange-500 text-white';
+            return 'bg-red-600 text-white';
+          };
+          const monthName = monthNamesFull[month - 1];
+          return (
+            <div className="bg-white rounded-lg shadow p-4 space-y-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-indigo-50 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold text-indigo-700">{consultas.length}</div>
+                  <div className="text-xs text-indigo-600">Total de buscas (sessões)</div>
                 </div>
-                
-                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-                  <h3 className="text-md font-bold text-slate-800 mb-4">💸 Elasticidade de Preço (Abandono)</h3>
-                  {abandonoPorValor.length > 0 ? (
-                    <div className="space-y-4">
-                      {abandonoPorValor.map((bin, i) => {
-                        const maxTotal = Math.max(...abandonoPorValor.map(b => b.total), 1);
-                        const widthTotal = (bin.total / maxTotal) * 100;
-                        const abandono = bin.total ? Math.round((1 - bin.taxaFech / 100) * 100) : 0;
-                        const cor = abandono >= 70 ? 'bg-rose-500' : abandono >= 50 ? 'bg-amber-500' : 'bg-emerald-500';
+                <div className="bg-emerald-50 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold text-emerald-700">{freqArray.length}</div>
+                  <div className="text-xs text-emerald-600">Datas únicas</div>
+                </div>
+                <div className="bg-amber-50 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold text-amber-700">{freqArray[0]?.count || 0}</div>
+                  <div className="text-xs text-amber-600">Pico de buscas (dia)</div>
+                </div>
+                <div className="bg-rose-50 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold text-rose-700">{monthName}</div>
+                  <div className="text-xs text-rose-600">Mês mais quente</div>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-md font-semibold text-slate-700 mb-2">📋 Tabela de Frequência por Data de Check‑in</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-700">
+                        <th className="px-4 py-2 text-left">Check‑in</th>
+                        <th className="px-4 py-2 text-left">Check‑out</th>
+                        <th className="px-4 py-2 text-left">Hóspedes</th>
+                        <th className="px-4 py-2 text-center">Frequência</th>
+                        <th className="px-4 py-2 text-left">Intensidade</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {freqArray.slice(0, 15).map((item, idx) => {
+                        const max = freqArray[0]?.count || 1;
+                        const width = (item.count / max) * 100;
                         return (
-                          <div key={i}>
-                            <div className="flex justify-between text-xs mb-1">
-                              <span className="font-medium text-slate-700">{bin.label}</span>
-                              <span className="text-slate-500">{abandono}% abandono</span>
-                            </div>
-                            <div className="w-full bg-slate-100 rounded-full h-2">
-                              <div className={`h-2 rounded-full ${cor}`} style={{ width: `${widthTotal}%` }} />
-                            </div>
-                          </div>
+                          <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
+                            <td className="px-4 py-2 font-medium">{item.checkin}</td>
+                            <td className="px-4 py-2">{item.checkout || '-'}</td>
+                            <td className="px-4 py-2">{item.adultos} adulto(s){item.criancas ? ` + ${item.criancas} criança(s)` : ''}</td>
+                            <td className="px-4 py-2 text-center font-bold">{item.count}</td>
+                            <td className="px-4 py-2">
+                              <div className="w-full bg-slate-200 rounded-full h-2.5">
+                                <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${Math.min(width, 100)}%` }} />
+                              </div>
+                            </td>
+                          </tr>
                         );
                       })}
-                    </div>
-                  ) : <p className="text-sm text-slate-400">Dados insuficientes</p>}
+                    </tbody>
+                  </table>
                 </div>
               </div>
-            </section>
-            
-            {/* O MAPA DE CALOR (CÓDIGO ORIGINAL MANTIDO DENTRO DO REVENUE TAB) */}
-            <section className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-               {/* INSIRA AQUI AQUELE CÓDIGO DA CONSTANTE "consultas" E DO RETORNO DO MAPA DE CALOR QUE ESTÁ NO SEU CÓDIGO ORIGINAL */}
-               <h3 className="text-md font-bold text-slate-800 mb-4">🗺️ Mapa de Calor de Demanda Futura</h3>
-               <p className="text-sm text-slate-500">Visualização de interesse de datas (implementação existente mantida).</p>
-               {/* O código do mapa de calor do original vai aqui perfeitamente */}
-            </section>
-          </div>
-        )}
 
-        {/* ================= ABA 2: CRM & VENDAS ================= */}
-        {activeTab === 'crm' && (
-          <div className="space-y-6 animate-fadeIn">
-            
-            {/* FUNIL */}
-            <section className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold text-slate-800">Funil de Conversão do Bot</h2>
-                <span className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm font-bold">
-                  {conversionRate}% Conv. Lead
-                </span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3 mt-4">
-                <TrackingCard label="Consultas" value={trackingStats.consultas} />
-                <TrackingCard label="Sucesso Disp." value={trackingStats.sucesso} />
-                <TrackingCard label="Sem Disp." value={trackingStats.vazias} />
-                <TrackingCard label="Carrinho" value={trackingStats.carrinho} />
-                <TrackingCard label="Orçamento" value={trackingStats.orcamento} color="gold" />
-                <TrackingCard label="WhatsApp" value={trackingStats.whatsapp} color="gold" />
-                <TrackingCard label="Abandonos" value={trackingStats.abandono} color="red" />
-                <TrackingCard label="Fechadas" value={trackingStats.reservas || 0} color="green" />
-              </div>
-            </section>
-
-            {/* PIPELINE / KANBAN */}
-            <section>
-              <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
-                <h2 className="text-lg font-bold text-slate-800">Pipeline de Clientes (Kanban)</h2>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={e => setSelectedDate(e.target.value)}
-                    className="text-sm bg-white border border-slate-300 rounded-md px-3 py-1.5 shadow-sm"
-                  />
-                  <div className="flex rounded-md overflow-hidden border border-slate-300">
-                    <button onClick={() => setViewMode('kanban')} className={`text-xs px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-[#1e293b] text-white' : 'bg-white text-slate-700'}`}>📊 Kanban</button>
-                    <button onClick={() => setViewMode('lista')} className={`text-xs px-3 py-1.5 ${viewMode === 'lista' ? 'bg-[#1e293b] text-white' : 'bg-white text-slate-700'}`}>📄 Lista</button>
+              <div>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+                  <h3 className="text-md font-semibold text-slate-700">🗓️ Mapa de Calor – {monthName} de {year}</h3>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-500 font-medium">Mês:</label>
+                    <select
+                      value={displayedMonth}
+                      onChange={(e) => setHeatmapMonth(e.target.value)}
+                      className="text-xs bg-white border border-slate-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-slate-700 shadow-sm"
+                    >
+                      {availableMonths.map(ym => {
+                        const [y, m] = ym.split('-').map(Number);
+                        const count = monthCount[ym] || 0;
+                        return (
+                          <option key={ym} value={ym}>
+                            {monthNamesFull[m - 1]} de {y} · {count} busca{count === 1 ? '' : 's'}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </div>
+                <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                  <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-slate-500 mb-1">
+                    <div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {Array.from({ length: firstDay }).map((_, idx) => (
+                      <div key={`e-${idx}`} className="aspect-square bg-slate-50 rounded" />
+                    ))}
+                    {Array.from({ length: daysInMonth }).map((_, day) => {
+                      const dayNum = day + 1;
+                      const freq = dayFreq[dayNum] || 0;
+                      const colorClass = getColor(freq);
+                      return (
+                        <div key={dayNum} className={`aspect-square flex items-center justify-center text-xs rounded font-medium transition-all ${colorClass}`}>
+                          {dayNum}
+                          {freq > 0 && <span className="ml-0.5 text-[10px] opacity-70">({freq})</span>}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
-              
-              {viewMode === 'kanban' ? (
-                <KanbanView
-                  sessoes={sessoes}
-                  ticketMedio={ticketMedio}
-                  onMarcarConfirmada={(sid, valor) => { setReservaModal({ sessionId: sid, acao: 'confirmar', valor }); setReservaForm({ ...reservaForm, valor: String(valor) }); }}
-                  onMarcarPerdida={(sid, valor) => { setReservaModal({ sessionId: sid, acao: 'perder', valor }); setReservaForm({ ...reservaForm, valor: String(valor) }); }}
-                />
+            </div>
+          );
+        })()}
+      </div>
+
+      <div id="fila-recuperacao" className="mb-8">
+        <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">
+          🔔 Fila de Recuperação
+          {filaRecuperacao.length > 0 && (
+            <span className="ml-2 text-sm font-normal text-slate-500">({filaRecuperacao.length})</span>
+          )}
+        </h2>
+        {filaRecuperacao.length === 0 ? (
+          <div className="bg-white rounded-lg shadow p-6 text-center text-slate-500 text-sm">
+            Nenhuma sessão pendente de follow-up. 🎉
+          </div>
+        ) : (
+          <div className="bg-white rounded-lg shadow overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-100 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Sessão</th>
+                  <th className="px-3 py-2 text-center">Score</th>
+                  <th className="px-3 py-2 text-right">Valor</th>
+                  <th className="px-3 py-2 text-center">Horas</th>
+                  <th className="px-3 py-2 text-left">Ação sugerida</th>
+                  <th className="px-3 py-2 text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filaRecuperacao.slice(0, 20).map(item => {
+                  const scoreColor = item.score >= 70 ? 'text-red-700 bg-red-50' : item.score >= 50 ? 'text-amber-700 bg-amber-50' : 'text-slate-700 bg-slate-50';
+                  return (
+                    <tr key={item.sessionId} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2 font-mono text-xs">{item.sessionId.substring(0, 18)}...</td>
+                      <td className="px-3 py-2 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${scoreColor}`}>{item.score}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold">{formatCurrency(item.valor)}</td>
+                      <td className="px-3 py-2 text-center text-slate-500">{item.horas}h</td>
+                      <td className="px-3 py-2 text-xs text-slate-600">{item.acao}</td>
+                      <td className="px-3 py-2 text-right space-x-1 whitespace-nowrap">
+                        <button
+                          onClick={() => {
+                            setReservaModal({ sessionId: item.sessionId, acao: 'confirmar', valor: item.valor });
+                            setReservaForm({ valor: String(item.valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                          }}
+                          className="text-xs bg-emerald-600 text-white px-2 py-1 rounded hover:bg-emerald-700"
+                        >
+                          ✅
+                        </button>
+                        <button
+                          onClick={() => {
+                            setReservaModal({ sessionId: item.sessionId, acao: 'perder', valor: item.valor });
+                            setReservaForm({ valor: String(item.valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                          }}
+                          className="text-xs bg-rose-600 text-white px-2 py-1 rounded hover:bg-rose-700"
+                        >
+                          ❌
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-2 mb-4 gap-2">
+        <h2 className="text-xl font-semibold text-[#1e293b]">🧑‍💻 Jornadas dos Clientes</h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex rounded-md overflow-hidden border border-slate-300">
+            <button
+              onClick={() => setViewMode('lista')}
+              className={`text-xs px-3 py-1.5 transition-colors ${viewMode === 'lista' ? 'bg-[#1e293b] text-white' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
+            >
+              📄 Lista
+            </button>
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={`text-xs px-3 py-1.5 transition-colors ${viewMode === 'kanban' ? 'bg-[#1e293b] text-white' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
+            >
+              📊 Kanban
+            </button>
+          </div>
+          <label className="text-xs text-slate-500 font-medium">Data:</label>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={e => setSelectedDate(e.target.value)}
+            className="text-xs bg-white border border-slate-300 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 shadow-sm"
+          />
+          {selectedDate && (
+            <button
+              onClick={() => setSelectedDate('')}
+              className="text-xs text-slate-400 hover:text-slate-600 bg-slate-100 px-2 py-1.5 rounded-md"
+            >
+              Ver Todas
+            </button>
+          )}
+        </div>
+      </div>
+
+      {viewMode === 'kanban' ? (
+        <KanbanView
+          sessoes={sessoes}
+          ticketMedio={ticketMedio}
+          onMarcarConfirmada={(sid, valor) => {
+            setReservaModal({ sessionId: sid, acao: 'confirmar', valor });
+            setReservaForm({ valor: String(valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+          }}
+          onMarcarPerdida={(sid, valor) => {
+            setReservaModal({ sessionId: sid, acao: 'perder', valor });
+            setReservaForm({ valor: String(valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+          }}
+        />
+      ) : (
+        <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
+          {(() => {
+            const JOURNEY_STEPS = [
+              { key: 'consulta_iniciada', label: 'Consulta', icon: '🔍' },
+              { key: 'consulta_sucesso', label: 'Sucesso', icon: '✅' },
+              { key: 'carrinho_adicionado', label: 'Carrinho', icon: '🛒' },
+              { key: 'orcamento_visualizado', label: 'Orçamento', icon: '📋' },
+              { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
+            ];
+            const filteredSessions = sessoes.filter(s => !selectedDate || s.eventDates.has(selectedDate));
+            const sortedSessions = [...filteredSessions].sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
+
+            if (sortedSessions.length === 0) {
+              return (
+                <div className="text-gray-500 text-center py-12">
+                  <div className="text-3xl mb-2">📅</div>
+                  Nenhuma jornada registrada para {selectedDate ? selectedDate.split('-').reverse().join('/') : 'o período'}.
+                </div>
+              );
+            }
+            const totalSessions = sortedSessions.length;
+            const confirmadasCount = sortedSessions.filter(s => s.statusFinal === 'confirmada').length;
+            const perdidasCount = sortedSessions.filter(s => s.statusFinal === 'perdida').length;
+
+            return (
+              <>
+                <div className="bg-slate-50 px-5 py-2.5 border-b border-slate-200 text-xs text-slate-600 flex flex-wrap gap-4 items-center justify-between">
+                  <div>
+                    Exibindo <strong>{totalSessions}</strong> sessão(ões){' '}
+                    {selectedDate ? `para o dia ${selectedDate.split('-').reverse().join('/')}` : 'no total'}.
+                  </div>
+                  <div className="flex gap-3">
+                    <span className="text-emerald-700 font-medium">✅ {confirmadasCount} Confirmadas</span>
+                    <span className="text-rose-700 font-medium">❌ {perdidasCount} Perdidas</span>
+                    <span className="text-blue-700 font-medium">🔄 {totalSessions - confirmadasCount - perdidasCount} Pendentes</span>
+                  </div>
+                </div>
+
+                <div className="divide-y divide-gray-100">
+                  {sortedSessions.map(sessao => {
+                    const { sessionId, eventos, lastTimestampMs, statusFinal } = sessao;
+                    const shortId = sessionId.length > 20 ? `${sessionId.substring(0, 10)}...` : sessionId;
+                    const score = calcularLeadScore(sessao, ticketMedio);
+
+                    let status = '🔄 Pendente';
+                    let statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
+                    if (statusFinal === 'confirmada') {
+                      status = '✅ Reserva Confirmada';
+                      statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                    } else if (statusFinal === 'perdida') {
+                      status = '❌ Não Fechou';
+                      statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
+                    } else if (eventos.some(e => e.event === 'whatsapp_enviado')) {
+                      status = '💬 Aguardando fechamento';
+                      statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                    } else if (eventos.some(e => e.event === 'carrinho_adicionado')) {
+                      status = '🛒 No carrinho';
+                      statusColor = 'bg-purple-50 text-purple-700 border-purple-200';
+                    }
+
+                    const lastTimeStr = lastTimestampMs
+                      ? new Date(lastTimestampMs).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+                      : '';
+                    const consulta = eventos.find(e => e.event === 'consulta_iniciada');
+                    const d = consulta?.data;
+
+                    return (
+                      <div key={sessionId} className="p-5 hover:bg-slate-50/50 transition-colors">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
+                              {shortId}
+                            </span>
+                            <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusColor}`}>
+                              {status}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${score >= 70 ? 'bg-red-100 text-red-700' : score >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                              Score {score}
+                            </span>
+                            {d && (
+                              <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                                📅 {d.checkin || '-'} até {d.checkout || '-'} • 👥 {d.adultos || 0}a
+                                {d.criancas ? ` + ${d.criancas}c` : ''}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs font-medium text-slate-400">{lastTimeStr}</span>
+                        </div>
+
+                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
+                          <div className="flex items-center justify-between relative">
+                            {JOURNEY_STEPS.map((step, idx) => {
+                              const isCompleted = eventos.some(e => e.event === step.key);
+                              return (
+                                <React.Fragment key={step.key}>
+                                  <div className="flex flex-col items-center z-10">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50' : 'bg-slate-200 text-slate-400'}`}>
+                                      {step.icon}
+                                    </div>
+                                    <span className={`text-[11px] mt-1 font-medium ${isCompleted ? 'text-slate-800' : 'text-slate-400'}`}>
+                                      {step.label}
+                                    </span>
+                                  </div>
+                                  {idx < JOURNEY_STEPS.length - 1 && (
+                                    <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
+                                      <div className={`h-full transition-all ${eventos.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'}`} />
+                                    </div>
+                                  )}
+                                </React.Fragment>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2 mb-3">
+                          {eventos.map((ev, idx) => {
+                            const evDate = normalizeDate(ev.timestamp);
+                            const eventTime = evDate
+                              ? evDate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })
+                              : '';
+                            let detail = '';
+                            switch (ev.event) {
+                              case 'consulta_iniciada': detail = `Busca para ${ev.data?.adultos || 0} adulto(s)`; break;
+                              case 'consulta_sucesso': detail = `${ev.data?.quartos || 0} quarto(s) disponível(is)`; break;
+                              case 'consulta_vazia': detail = 'Nenhum quarto disponível'; break;
+                              case 'carrinho_adicionado': detail = `${ev.data?.quantidade || 0} item(ns)`; break;
+                              case 'orcamento_visualizado': detail = `Valor: ${formatCurrency(Number(ev.data?.total || 0))}`; break;
+                              case 'whatsapp_enviado': detail = `Contato por ${ev.data?.cliente || 'Cliente'} (${formatCurrency(Number(ev.data?.total || 0))})`; break;
+                              case 'reserva_confirmada': detail = `R$ ${ev.data?.valor_final || 0} · ${ev.data?.categoria || '-'} · ${ev.data?.canal || '-'}`; break;
+                              case 'reserva_perdida': detail = `Motivo: ${ev.data?.motivo || '-'}`; break;
+                              case 'abandono': detail = `Na etapa: ${ev.data?.stage || 'desconhecida'}`; break;
+                              default: detail = typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data || {});
+                            }
+                            return (
+                              <div key={idx} className="flex items-center justify-between text-xs text-slate-600 hover:text-slate-900">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                                  <span className="font-semibold capitalize text-slate-700">{ev.event.replace(/_/g, ' ')}:</span>
+                                  <span className="text-slate-500">{detail}</span>
+                                </div>
+                                <span className="text-[10px] text-slate-400 font-mono">{eventTime}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {eventos.some(e => e.event === 'whatsapp_enviado') && statusFinal === 'pendente' && (
+                          <div className="flex gap-2 pt-2 border-t border-slate-100">
+                            <button
+                              onClick={() => {
+                                setReservaModal({ sessionId, acao: 'confirmar', valor: sessao.valorCotado });
+                                setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                              }}
+                              className="flex-1 bg-emerald-600 text-white px-3 py-2 rounded text-xs font-medium hover:bg-emerald-700"
+                            >
+                              ✅ Marcar Reserva Confirmada
+                            </button>
+                            <button
+                              onClick={() => {
+                                setReservaModal({ sessionId, acao: 'perder', valor: sessao.valorCotado });
+                                setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                              }}
+                              className="flex-1 bg-rose-600 text-white px-3 py-2 rounded text-xs font-medium hover:bg-rose-700"
+                            >
+                              ❌ Não Fechou
+                            </button>
+                          </div>
+                        )}
+
+                        {statusFinal !== 'pendente' && (
+                          <div className="pt-2 border-t border-slate-100 flex gap-2">
+                            <button
+                              onClick={() => {
+                                setReservaModal({ sessionId, acao: statusFinal === 'confirmada' ? 'perder' : 'confirmar', valor: sessao.valorCotado });
+                                setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                              }}
+                              className="text-xs text-slate-500 hover:text-slate-800 underline"
+                            >
+                              Alterar status
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
+          <span>ID</span><span>Mensagens</span><span>Última Atualização</span><span>Origem</span><span>Ações</span>
+        </div>
+        {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => {
+          const parsedConvDate = normalizeDate(conv.last_updated);
+          const formattedDate = parsedConvDate
+            ? parsedConvDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+            : 'Data não disponível';
+          return (
+            <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
+              <span className="font-mono text-xs text-[#1e293b] truncate">{conv.id.substring(0, 20)}...</span>
+              <span>{conv.total_messages}</span>
+              <span className="text-gray-600 text-xs">{formattedDate}</span>
+              <span>{conv.source}</span>
+              <button
+                onClick={() => handleViewConversation(conv.id)}
+                className="bg-[#1e293b] text-white px-2 py-1 rounded text-xs hover:bg-[#2d3a4f]"
+              >
+                Ver Conversa
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {filtered.length > pageSize && (
+        <div className="flex justify-center gap-2 mt-4">
+          <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 border rounded disabled:opacity-50">◀</button>
+          <span className="px-3 py-1">{currentPage} de {Math.ceil(filtered.length / pageSize)}</span>
+          <button
+            onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))}
+            disabled={currentPage === Math.ceil(filtered.length / pageSize)}
+            className="px-3 py-1 border rounded disabled:opacity-50"
+          >▶</button>
+        </div>
+      )}
+
+      {selectedConvId && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden border border-slate-100">
+            <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
+              <div>
+                <h3 className="font-semibold text-sm">Conversa Detalhada</h3>
+                <p className="font-mono text-xs text-slate-300 truncate max-w-md">{selectedConvId}</p>
+              </div>
+              <button onClick={() => setSelectedConvId(null)} className="text-slate-400 hover:text-white p-1 rounded-lg text-lg leading-none">✕</button>
+            </div>
+            <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-slate-50 min-h-[300px]">
+              {loadingConv ? (
+                <div className="flex justify-center items-center h-48 text-slate-500 text-sm">Carregando mensagens...</div>
+              ) : convMessages.length === 0 ? (
+                <div className="text-center py-12 text-slate-400 text-sm">Nenhuma mensagem encontrada.</div>
               ) : (
-                <div className="bg-white p-4 rounded-xl border border-slate-200">
-                  <p className="text-sm text-slate-500">Modo lista ativado (renderizar componente de lista de jornadas original aqui).</p>
+                convMessages.map((msg, idx) => {
+                  const isUser = msg.role === 'user' || msg.role === 'cliente';
+                  const parsedMsgDate = normalizeDate(msg.timestamp);
+                  return (
+                    <div key={idx} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+                      <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${isUser ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
+                        <div className="font-semibold text-[10px] mb-1 opacity-75">{isUser ? '👤 Cliente' : '🤖 Assistente'}</div>
+                        <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                      </div>
+                      {parsedMsgDate && (
+                        <span className="text-[10px] text-slate-400 mt-1 px-1">
+                          {parsedMsgDate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="p-3 bg-white border-t border-slate-100 flex justify-end">
+              <button onClick={() => setSelectedConvId(null)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-4 py-2 rounded-lg font-medium">Fechar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reservaModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-100">
+            <div className={`p-4 text-white ${reservaModal.acao === 'confirmar' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+              <h3 className="font-semibold text-base">
+                {reservaModal.acao === 'confirmar' ? '✅ Confirmar Reserva' : '❌ Marcar como Perdida'}
+              </h3>
+              <p className="font-mono text-xs text-white/80 truncate mt-0.5">{reservaModal.sessionId}</p>
+            </div>
+            <div className="p-4 space-y-3">
+              {reservaModal.acao === 'confirmar' ? (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Valor final (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={reservaForm.valor}
+                      onChange={e => setReservaForm(f => ({ ...f, valor: e.target.value }))}
+                      className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                      placeholder="0,00"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Categoria</label>
+                    <select
+                      value={reservaForm.categoria}
+                      onChange={e => setReservaForm(f => ({ ...f, categoria: e.target.value }))}
+                      className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                    >
+                      <option value="SUP">Apartamento Superior</option>
+                      <option value="SEN">Suíte Sênior</option>
+                      <option value="MAS">Suíte Master (Cobertura)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Canal</label>
+                    <select
+                      value={reservaForm.canal}
+                      onChange={e => setReservaForm(f => ({ ...f, canal: e.target.value }))}
+                      className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                    >
+                      <option value="whatsapp">WhatsApp</option>
+                      <option value="telefone">Telefone</option>
+                      <option value="email">E-mail</option>
+                    </select>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Motivo da perda</label>
+                  <select
+                    value={reservaForm.motivo}
+                    onChange={e => setReservaForm(f => ({ ...f, motivo: e.target.value }))}
+                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                  >
+                    <option value="preco">Preço alto</option>
+                    <option value="data">Data indisponível</option>
+                    <option value="categoria">Categoria inadequada</option>
+                    <option value="sumiu">Cliente sumiu</option>
+                    <option value="concorrente">Fechou com concorrente</option>
+                    <option value="outro">Outro</option>
+                  </select>
                 </div>
               )}
-            </section>
-
-            {/* FILA DE RECUPERAÇÃO */}
-            <section id="fila-recuperacao">
-               <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                 🔔 Fila de Follow-up 
-                 <span className="bg-rose-100 text-rose-700 text-xs px-2 py-0.5 rounded-full">{filaRecuperacao.length} pendentes</span>
-               </h2>
-               {/* TABELA DE FILA DE RECUPERAÇÃO MANTIDA DO ORIGINAL */}
-            </section>
-          </div>
-        )}
-
-        {/* ================= ABA 3: ATENDIMENTO & CHAT ================= */}
-        {activeTab === 'chat' && (
-          <div className="space-y-6 animate-fadeIn">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <StatCard label="Total Conversas" value={stats.total} />
-              <StatCard label="Mensagens Trocadas" value={stats.msgs.toLocaleString()} />
-              <StatCard label="Conversas Hoje" value={stats.today} />
-              <StatCard label="Média por Chat" value={stats.avg.toFixed(1)} suffix=" msg" />
-            </div>
-
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="grid grid-cols-5 bg-slate-50 border-b p-4 font-bold text-sm text-slate-700">
-                <span>Sessão / ID</span><span>Interações</span><span>Último Contato</span><span>Origem</span><span>Ações</span>
-              </div>
-              <div className="divide-y divide-slate-100">
-                {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => (
-                  <div key={conv.id} className="grid grid-cols-5 p-4 items-center text-sm hover:bg-slate-50 transition-colors">
-                    <span className="font-mono text-xs text-slate-600 truncate">{conv.id.substring(0, 15)}...</span>
-                    <span className="font-semibold">{conv.total_messages}</span>
-                    <span className="text-slate-500 text-xs">{normalizeDate(conv.last_updated)?.toLocaleString('pt-BR') || '-'}</span>
-                    <span className="capitalize">{conv.source.replace('_', ' ')}</span>
-                    <button
-                      onClick={() => handleViewConversation(conv.id)}
-                      className="bg-slate-800 text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-slate-700 w-max"
-                    >
-                      Ler Log
-                    </button>
-                  </div>
-                ))}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => setReservaModal(null)}
+                  disabled={salvandoStatus}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded text-sm font-medium disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => {
+                    if (reservaModal.acao === 'confirmar') {
+                      marcarReserva(reservaModal.sessionId, 'confirmada', {
+                        valor: Number(reservaForm.valor) || 0,
+                        categoria: reservaForm.categoria,
+                        canal: reservaForm.canal,
+                        valorCotado: reservaModal.valor,
+                      });
+                    } else {
+                      marcarReserva(reservaModal.sessionId, 'perdida', {
+                        motivo: reservaForm.motivo,
+                        valorCotado: reservaModal.valor,
+                      });
+                    }
+                  }}
+                  disabled={salvandoStatus}
+                  className={`flex-1 text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50 ${reservaModal.acao === 'confirmar' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}`}
+                >
+                  {salvandoStatus ? 'Salvando...' : 'Confirmar'}
+                </button>
               </div>
             </div>
-            
-            {/* Paginação */}
-            {filtered.length > pageSize && (
-              <div className="flex justify-center gap-2 mt-4">
-                <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 bg-white border rounded shadow-sm disabled:opacity-50">Anterior</button>
-                <span className="px-4 py-1 font-medium">Pág {currentPage} de {Math.ceil(filtered.length / pageSize)}</span>
-                <button onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))} disabled={currentPage === Math.ceil(filtered.length / pageSize)} className="px-3 py-1 bg-white border rounded shadow-sm disabled:opacity-50">Próxima</button>
-              </div>
-            )}
           </div>
-        )}
-
-      </main>
-
-      {/* MODAIS (Chat Modal, Reserva Modal) - MANTIDOS EXATAMENTE COMO NO SEU CÓDIGO */}
-      {/* ... */}
+        </div>
+      )}
     </div>
   );
 };
 
-// ================= COMPONENTES NOVOS E AUXILIARES =================
+// ========= SUBCOMPONENTES =========
 
-// NOVO: Componente inteligente que analisa dados para sugerir Revenue actions
-const RevenueAlerts: React.FC<{ ocupacao: OcupacaoDiaria[], trackingEvents: TrackingEvent[] }> = ({ ocupacao, trackingEvents }) => {
-  // Lógica de motor RMS:
-  const buscasPorData: Record<string, number> = {};
-  trackingEvents.forEach(e => {
-    if (e.event === 'consulta_iniciada' && e.data?.checkin) {
-      buscasPorData[e.data.checkin] = (buscasPorData[e.data.checkin] || 0) + 1;
-    }
+const KanbanView: React.FC<{
+  sessoes: SessaoAgrupada[];
+  ticketMedio: number;
+  onMarcarConfirmada: (sid: string, valor: number) => void;
+  onMarcarPerdida: (sid: string, valor: number) => void;
+}> = ({ sessoes, ticketMedio, onMarcarConfirmada, onMarcarPerdida }) => {
+  const etapas = [
+    { key: 'consulta_iniciada', label: 'Buscou', icon: '🔍' },
+    { key: 'consulta_sucesso', label: 'Viu quartos', icon: '✅' },
+    { key: 'carrinho_adicionado', label: 'Carrinho', icon: '🛒' },
+    { key: 'orcamento_visualizado', label: 'Orçamento', icon: '📋' },
+    { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
+  ];
+
+  const porEtapa = (idx: number) => sessoes.filter(s => {
+    if (s.statusFinal !== 'pendente') return false;
+    const etapasDaSessao = s.eventos.map(e => e.event);
+    const ultimaEtapa = etapas.map(e => e.key).filter(k => etapasDaSessao.includes(k)).pop();
+    return ultimaEtapa === etapas[idx].key;
   });
 
-  const alertas = ocupacao.map(d => {
-    const [dd, mm, yyyy] = d.data.split('/');
-    const isoDate = `${yyyy}-${mm}-${dd}`;
-    const buscas = buscasPorData[isoDate] || 0;
-    const pct = d.ocupacao * 100;
-    
-    // Regras de negócio do RMS
-    if (pct >= 80 && buscas > 2) return { tipo: 'alta', msg: `Data ${d.data} com ${pct.toFixed(0)}% de ocupação e alta demanda. Aumentar tarifa Base (BAR) em 10-15%.`, date: isoDate };
-    if (pct < 30 && buscas < 2) return { tipo: 'baixa', msg: `Data ${d.data} ociosa (Ocup. ${pct.toFixed(0)}%). Considerar campanha ou Flash Sale.`, date: isoDate };
-    return null;
-  }).filter(Boolean) as {tipo: string, msg: string, date: string}[];
-
-  // Mostra só os 3 mais urgentes para não poluir
-  const topAlertas = alertas.slice(0, 3);
-
-  if (topAlertas.length === 0) return null;
-
   return (
-    <div className="bg-indigo-50 border-l-4 border-indigo-500 rounded-r-lg p-4 mb-2 shadow-sm">
-      <h3 className="text-sm font-bold text-indigo-900 mb-2 flex items-center gap-2">
-        🤖 Assistente de Revenue (Insights)
-      </h3>
-      <ul className="space-y-1.5">
-        {topAlertas.map((alerta, i) => (
-          <li key={i} className="text-sm flex items-start gap-2">
-            <span>{alerta.tipo === 'alta' ? '🚀' : '📉'}</span>
-            <span className={alerta.tipo === 'alta' ? 'text-indigo-800' : 'text-slate-600'}>
-              {alerta.msg}
-            </span>
-          </li>
-        ))}
-      </ul>
+    <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6">
+      {etapas.map((etapa, idx) => {
+        const cards = porEtapa(idx).sort((a, b) => calcularLeadScore(b, ticketMedio) - calcularLeadScore(a, ticketMedio));
+        return (
+          <div key={etapa.key} className="bg-slate-50 rounded-lg p-2 border border-slate-200 min-h-[200px]">
+            <div className="flex items-center justify-between mb-2 px-1">
+              <span className="text-xs font-semibold text-slate-700">{etapa.icon} {etapa.label}</span>
+              <span className="text-xs font-bold text-slate-500 bg-white px-2 py-0.5 rounded-full">{cards.length}</span>
+            </div>
+            <div className="space-y-2">
+              {cards.slice(0, 8).map(s => {
+                const score = calcularLeadScore(s, ticketMedio);
+                const consulta = s.eventos.find(e => e.event === 'consulta_iniciada');
+                return (
+                  <div key={s.sessionId} className="bg-white rounded p-2 shadow-sm border border-slate-100 text-xs">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono text-[10px] text-slate-500">{s.sessionId.substring(0, 10)}...</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${score >= 70 ? 'bg-red-100 text-red-700' : score >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                        {score}
+                      </span>
+                    </div>
+                    {consulta?.data?.checkin && (
+                      <div className="text-[10px] text-slate-500 mb-1">
+                        {consulta.data.checkin} · {consulta.data.adultos}a{consulta.data.criancas ? `+${consulta.data.criancas}c` : ''}
+                      </div>
+                    )}
+                    {s.valorCotado > 0 && (
+                      <div className="text-[11px] font-semibold text-emerald-700 mb-1">{formatCurrency(s.valorCotado)}</div>
+                    )}
+                    {etapa.key === 'whatsapp_enviado' && (
+                      <div className="flex gap-1 mt-1">
+                        <button
+                          onClick={() => onMarcarConfirmada(s.sessionId, s.valorCotado)}
+                          className="flex-1 bg-emerald-600 text-white px-1 py-0.5 rounded text-[10px] hover:bg-emerald-700"
+                          title="Confirmar reserva"
+                        >✅</button>
+                        <button
+                          onClick={() => onMarcarPerdida(s.sessionId, s.valorCotado)}
+                          className="flex-1 bg-rose-600 text-white px-1 py-0.5 rounded text-[10px] hover:bg-rose-700"
+                          title="Não fechou"
+                        >❌</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {cards.length > 8 && (
+                <div className="text-[10px] text-slate-400 text-center">+ {cards.length - 8} mais</div>
+              )}
+              {cards.length === 0 && (
+                <div className="text-[10px] text-slate-400 text-center py-4">Vazio</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 };
 
-const KPICard: React.FC<{title: string, value: string | number, sub?: string, subValue?: string, color: 'emerald'|'blue'|'indigo'|'rose'}> = ({title, value, sub, subValue, color}) => {
-  const colorClasses = {
-    emerald: 'border-emerald-500 text-emerald-700',
-    blue: 'border-blue-500 text-blue-700',
-    indigo: 'border-indigo-500 text-indigo-700',
-    rose: 'border-rose-500 text-rose-700'
-  };
+const OcupacaoTable: React.FC<{
+  ocupacao: OcupacaoDiaria[];
+  sessoes: SessaoAgrupada[];
+}> = ({ ocupacao, sessoes }) => {
+  const buscasPorData: Record<string, number> = {};
+  sessoes.forEach(s => {
+    const c = s.eventos.find(e => e.event === 'consulta_iniciada');
+    const checkin = c?.data?.checkin;
+    if (checkin) buscasPorData[checkin] = (buscasPorData[checkin] || 0) + 1;
+  });
+
+  const hoje = new Date();
+  const hojeStr = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`;
+
   return (
-    <div className={`bg-white rounded-xl shadow-sm p-4 border-l-4 ${colorClasses[color].split(' ')[0]}`}>
-      <div className={`text-2xl font-bold ${colorClasses[color].split(' ')[1]}`}>{value}</div>
-      <div className="text-xs font-medium text-slate-500 uppercase tracking-wide mt-1">{title}</div>
-      {sub && <div className="text-[10px] text-slate-400 mt-2">{sub} <strong className="text-slate-600">{subValue}</strong></div>}
+    <div>
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3 className="text-sm font-semibold text-slate-700">📅 Próximos 60 dias — Demanda vs Ocupação</h3>
+        <div className="text-xs text-slate-500">Total: 18 unidades (6 SUP · 6 SEN · 6 MAS)</div>
+      </div>
+      <div className="overflow-x-auto max-h-[420px]">
+        <table className="w-full text-xs border-collapse">
+          <thead className="sticky top-0 bg-slate-100 text-slate-700">
+            <tr>
+              <th className="px-2 py-2 text-left">Data</th>
+              <th className="px-2 py-2 text-center">Buscas</th>
+              <th className="px-2 py-2 text-center">SUP</th>
+              <th className="px-2 py-2 text-center">SEN</th>
+              <th className="px-2 py-2 text-center">MAS</th>
+              <th className="px-2 py-2 text-center">Ocupação</th>
+              <th className="px-2 py-2 text-left">Barra</th>
+              <th className="px-2 py-2 text-left">Sinal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ocupacao.map((d, i) => {
+              const [dd, mm, yyyy] = d.data.split('/');
+              const isoDate = `${yyyy}-${mm}-${dd}`;
+              const buscas = buscasPorData[isoDate] || 0;
+              const pct = Math.round(d.ocupacao * 100);
+              const corBarra = pct >= 80 ? 'bg-red-600' : pct >= 60 ? 'bg-orange-500' : pct >= 40 ? 'bg-amber-400' : 'bg-emerald-500';
+
+              let sinal = '';
+              let sinalCor = '';
+              if (buscas >= 3 && pct < 40) { sinal = '🔴 Subir preço'; sinalCor = 'text-red-700'; }
+              else if (buscas >= 3 && pct >= 60) { sinal = '🟡 Já no caminho'; sinalCor = 'text-amber-700'; }
+              else if (buscas <= 1 && pct < 30) { sinal = '🔵 Promover'; sinalCor = 'text-blue-700'; }
+              else if (buscas <= 1 && pct >= 70) { sinal = '⚪ Manter'; sinalCor = 'text-slate-500'; }
+              else { sinal = '·'; sinalCor = 'text-slate-400'; }
+
+              const isHoje = isoDate === hojeStr;
+
+              return (
+                <tr key={i} className={`border-b border-slate-100 ${isHoje ? 'bg-indigo-50' : ''}`}>
+                  <td className="px-2 py-1.5 font-mono">{d.data}</td>
+                  <td className="px-2 py-1.5 text-center font-semibold">{buscas || '·'}</td>
+                  <td className="px-2 py-1.5 text-center text-slate-500">{d.porCategoria.SUP}</td>
+                  <td className="px-2 py-1.5 text-center text-slate-500">{d.porCategoria.SEN}</td>
+                  <td className="px-2 py-1.5 text-center text-slate-500">{d.porCategoria.MAS}</td>
+                  <td className="px-2 py-1.5 text-center font-bold">{pct}%</td>
+                  <td className="px-2 py-1.5 w-32">
+                    <div className="w-full bg-slate-200 rounded-full h-2">
+                      <div className={`h-2 rounded-full ${corBarra}`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </td>
+                  <td className={`px-2 py-1.5 text-xs font-medium ${sinalCor}`}>{sinal}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-slate-400 mt-3">
+        <strong>Sinal:</strong> 🔴 buscas altas + ocupação baixa → oportunidade de subir · 🔵 buscas baixas + ocupação baixa → promoção · ⚪ ocupação alta → manter.
+      </p>
     </div>
   );
-}
+};
 
-// Os componentes OcupacaoTable, KanbanView, TrackingCard, StatCard existentes continuam iguais,
-// recebendo pequenos ajustes estéticos usando as classes do Tailwind para acompanhar o novo layout (ex: rounded-xl, shadow-sm).
+// ========= COMPONENTES AUXILIARES =========
+const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({ label, value, suffix = '' }) => (
+  <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#1e293b]">
+    <div className="text-2xl font-bold text-[#1e293b]">{value}{suffix}</div>
+    <div className="text-sm text-gray-600">{label}</div>
+  </div>
+);
+
+const TrackingCard: React.FC<{ label: string; value: number; color?: string }> = ({ label, value, color }) => {
+  const borderColor =
+    color === 'gold' ? 'border-t-yellow-500'
+    : color === 'red' ? 'border-t-red-500'
+    : color === 'green' ? 'border-t-emerald-500'
+    : 'border-t-[#1e293b]';
+  return (
+    <div className={`bg-white p-3 rounded-lg shadow text-center border-t-4 ${borderColor}`}>
+      <div className="text-2xl font-bold text-[#1e293b]">{value}</div>
+      <div className="text-xs text-gray-600">{label}</div>
+    </div>
+  );
+};
