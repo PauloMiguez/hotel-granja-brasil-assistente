@@ -27,6 +27,17 @@ interface OcupacaoDiaria {
   data: string; livres: number; ocupadas: number; ocupacao: number;
   porCategoria: { SUP: number; SEN: number; MAS: number };
 }
+interface AlertaFlutuacao {
+  data: string;
+  dataBR: string;
+  buscas: number;
+  ocupacaoPct: number;
+  livres: number;
+  tipo: 'subir' | 'promover' | 'manter' | 'observar';
+  sugestao: string;
+  deltaPct: number;
+  prioridade: number;
+}
 
 // ========= NORMALIZAÇÃO DE DATA =========
 const normalizeDate = (rawTimestamp: any): Date | null => {
@@ -147,12 +158,12 @@ const agruparSessoes = (eventos: TrackingEvent[]): SessaoAgrupada[] => {
 };
 
 // ========= LEAD SCORE =========
-const calcularLeadScore = (s: SessaoAgrupada, ticketMedio: number): number => {
+const calcularLeadScore = (s: SessaoAgrupada, adr: number): number => {
   const etapas = ['consulta_iniciada', 'consulta_sucesso', 'carrinho_adicionado', 'orcamento_visualizado', 'whatsapp_enviado'];
   const ultimo = s.ultimoEvento;
   const idxUltimo = ultimo ? etapas.indexOf(ultimo.event) : -1;
   const etapasPct = idxUltimo >= 0 ? (idxUltimo + 1) / etapas.length : 0;
-  const valorPct = ticketMedio > 0 ? Math.min(s.valorCotado / ticketMedio, 1) : 0;
+  const valorPct = adr > 0 ? Math.min(s.valorCotado / adr, 1) : 0;
 
   const consulta = s.eventos.find(e => e.event === 'consulta_iniciada');
   const noites = consulta?.data?.checkin && consulta?.data?.checkout
@@ -187,12 +198,7 @@ const analisarAbandonoPorValor = (sessoes: SessaoAgrupada[]) => {
   const comValor = comCarrinho.filter(s => s.valorCotado > 0);
   const semValor = comCarrinho.filter(s => s.valorCotado === 0);
 
-  const construirBin = (
-    label: string,
-    min: number,
-    max: number,
-    sessoesDoBin: SessaoAgrupada[],
-  ) => {
+  const construirBin = (label: string, min: number, max: number, sessoesDoBin: SessaoAgrupada[]) => {
     const total = sessoesDoBin.length;
     const comWhats = sessoesDoBin.filter(s =>
       s.eventos.some(e => e.event === 'whatsapp_enviado')
@@ -216,9 +222,7 @@ const analisarAbandonoPorValor = (sessoes: SessaoAgrupada[]) => {
   const resultado = bins
     .map(bin =>
       construirBin(
-        bin.label,
-        bin.min,
-        bin.max,
+        bin.label, bin.min, bin.max,
         comValor.filter(s => s.valorCotado >= bin.min && s.valorCotado < bin.max),
       )
     )
@@ -263,7 +267,7 @@ const analisarLeadTime = (sessoes: SessaoAgrupada[]) => {
 };
 
 // ========= FILA DE RECUPERAÇÃO =========
-const gerarFilaRecuperacao = (sessoes: SessaoAgrupada[], ticketMedio: number) => {
+const gerarFilaRecuperacao = (sessoes: SessaoAgrupada[], adr: number) => {
   const agora = Date.now();
   return sessoes
     .filter(s => {
@@ -280,14 +284,14 @@ const gerarFilaRecuperacao = (sessoes: SessaoAgrupada[], ticketMedio: number) =>
           ? 'Enviar WhatsApp ativo — viu orçamento e não engajou'
           : 'Régua de reativação';
       return {
-        sessionId: s.sessionId, score: calcularLeadScore(s, ticketMedio),
+        sessionId: s.sessionId, score: calcularLeadScore(s, adr),
         valor: s.valorCotado, horas, acao, temWhats,
       };
     })
     .sort((a, b) => b.score - a.score);
 };
 
-// ========= STATS DERIVADOS DAS SESSÕES ÚNICAS =========
+// ========= STATS DERIVADOS =========
 const calcularStatsDerivados = (sessoes: SessaoAgrupada[]): TrackingStats => {
   const s: TrackingStats = {
     consultas: 0, sucesso: 0, vazias: 0, carrinho: 0,
@@ -306,6 +310,59 @@ const calcularStatsDerivados = (sessoes: SessaoAgrupada[]): TrackingStats => {
     if (sessao.statusFinal === 'perdida') s.perdas = (s.perdas || 0) + 1;
   });
   return s;
+};
+
+// ========= ALERTAS DINÂMICOS DE FLUTUAÇÃO =========
+const gerarAlertasFlutuacao = (
+  ocupacao: OcupacaoDiaria[],
+  sessoes: SessaoAgrupada[],
+): AlertaFlutuacao[] => {
+  const buscasPorData: Record<string, number> = {};
+  sessoes.forEach(s => {
+    const c = s.eventos.find(e => e.event === 'consulta_iniciada');
+    const checkin = c?.data?.checkin;
+    if (checkin) buscasPorData[checkin] = (buscasPorData[checkin] || 0) + 1;
+  });
+
+  const alertas: AlertaFlutuacao[] = [];
+  ocupacao.forEach(d => {
+    const [dd, mm, yyyy] = d.data.split('/');
+    const isoDate = `${yyyy}-${mm}-${dd}`;
+    const buscas = buscasPorData[isoDate] || 0;
+    const pct = Math.round(d.ocupacao * 100);
+    const dataBR = `${dd}/${mm}`;
+
+    let tipo: AlertaFlutuacao['tipo'] = 'observar';
+    let sugestao = '';
+    let deltaPct = 0;
+    let prioridade = 0;
+
+    if (buscas >= 4 && pct < 40) {
+      tipo = 'subir'; deltaPct = 8; prioridade = 3;
+      sugestao = `${buscas} buscas para apenas ${pct}% de ocupação. Demanda reprimida — subir BAR em ~${deltaPct}%.`;
+    } else if (buscas >= 3 && pct < 40) {
+      tipo = 'subir'; deltaPct = 5; prioridade = 2;
+      sugestao = `${buscas} buscas para ${pct}% de ocupação. Subir BAR em ~${deltaPct}%.`;
+    } else if (buscas <= 1 && pct < 30) {
+      tipo = 'promover'; deltaPct = -10; prioridade = 2;
+      sugestao = `Baixa demanda (${buscas} busca${buscas === 1 ? '' : 's'}) e ${pct}% de ocupação. Considerar flash sale ~${Math.abs(deltaPct)}% off.`;
+    } else if (pct >= 70) {
+      tipo = 'manter'; deltaPct = 0; prioridade = 1;
+      sugestao = `Ocupação em ${pct}% (${d.livres} livre${d.livres === 1 ? '' : 's'}). Manter tarifa.`;
+    }
+
+    if (tipo !== 'observar') {
+      alertas.push({
+        data: isoDate, dataBR, buscas, ocupacaoPct: pct, livres: d.livres,
+        tipo, sugestao, deltaPct, prioridade,
+      });
+    }
+  });
+
+  return alertas.sort((a, b) => {
+    if (b.prioridade !== a.prioridade) return b.prioridade - a.prioridade;
+    return a.data.localeCompare(b.data);
+  });
 };
 
 // ========= COMPONENTE PRINCIPAL =========
@@ -328,8 +385,8 @@ export const AdminPanel: React.FC = () => {
     todayBrasilia ? todayBrasilia.dateStr : new Date().toISOString().split('T')[0]
   );
   const [heatmapMonth, setHeatmapMonth] = useState<string>('');
-
   const [viewMode, setViewMode] = useState<'lista' | 'kanban'>('lista');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'demanda' | 'jornadas' | 'conversas'>('dashboard');
 
   const [reservaModal, setReservaModal] = useState<{
     sessionId: string; acao: 'confirmar' | 'perder'; valor: number;
@@ -392,7 +449,7 @@ export const AdminPanel: React.FC = () => {
     finally { setLoadingConv(false); }
   };
 
-  // ========= FETCH TRACKING (apenas eventos) =========
+  // ========= FETCH TRACKING =========
   const fetchTrackingStats = useCallback(async () => {
     try {
       const res = await fetch(`${WORKER_URL}/tracking-stats`);
@@ -416,7 +473,6 @@ export const AdminPanel: React.FC = () => {
     }
   }, []);
 
-  // ========= FETCH OCUPAÇÃO =========
   const fetchOcupacao = useCallback(async (start: Date, end: Date) => {
     setLoadingOcupacao(true);
     try {
@@ -481,7 +537,6 @@ export const AdminPanel: React.FC = () => {
     } catch { return null; }
   };
 
-  // ========= POST /track para marcar reserva =========
   const marcarReserva = async (
     sessionId: string,
     tipo: 'confirmada' | 'perdida',
@@ -546,7 +601,6 @@ export const AdminPanel: React.FC = () => {
     setIsRefreshing(false);
   };
 
-  // ========= EXPORT CSV =========
   const exportCSV = () => {
     const headers = ['Sessao', 'Evento', 'Timestamp', 'Detalhes'];
     const rows = trackingEvents
@@ -585,10 +639,33 @@ export const AdminPanel: React.FC = () => {
 
   // ========= MÉTRICAS DERIVADAS =========
   const sessoes = useMemo(() => agruparSessoes(trackingEvents), [trackingEvents]);
-
   const trackingStats = useMemo(() => calcularStatsDerivados(sessoes), [sessoes]);
 
-  const ticketMedio = useMemo(() => {
+  // 🔥 ADR (Average Daily Rate) — receita por noite reservada
+  const adr = useMemo(() => {
+    const confirmadas = sessoes.filter(s => s.statusFinal === 'confirmada');
+    if (!confirmadas.length) return 0;
+    const valoresPorNoite: number[] = [];
+    confirmadas.forEach(s => {
+      const conf = s.eventos.find(e => e.event === 'reserva_confirmada');
+      const valor = Number(conf?.data?.valor_final || 0);
+      if (valor <= 0) return;
+      const consulta = s.eventos.find(e => e.event === 'consulta_iniciada');
+      const d = consulta?.data;
+      let noites = 1;
+      if (d?.checkin && d?.checkout) {
+        const diff = (new Date(d.checkout).getTime() - new Date(d.checkin).getTime()) / 86400000;
+        if (diff > 0) noites = diff;
+      }
+      valoresPorNoite.push(valor / noites);
+    });
+    return valoresPorNoite.length
+      ? valoresPorNoite.reduce((a, b) => a + b, 0) / valoresPorNoite.length
+      : 0;
+  }, [sessoes]);
+
+  // ADR Proxy: quando não há noites, usa média simples das reservas
+  const adrProxy = useMemo(() => {
     const confirmadas = sessoes.filter(s => s.statusFinal === 'confirmada');
     if (!confirmadas.length) return 0;
     const total = confirmadas.reduce((acc, s) => {
@@ -631,10 +708,12 @@ export const AdminPanel: React.FC = () => {
 
   const abandonoPorValor = useMemo(() => analisarAbandonoPorValor(sessoes), [sessoes]);
   const leadTimeData = useMemo(() => analisarLeadTime(sessoes), [sessoes]);
-  const filaRecuperacao = useMemo(() => gerarFilaRecuperacao(sessoes, ticketMedio), [sessoes, ticketMedio]);
+  const filaRecuperacao = useMemo(() => gerarFilaRecuperacao(sessoes, adrProxy), [sessoes, adrProxy]);
+  const alertasFlutuacao = useMemo(
+    () => gerarAlertasFlutuacao(ocupacao, sessoes),
+    [ocupacao, sessoes]
+  );
 
-  // 🔥 Buscas por sessão (contagem alinhada com trackingStats.consultas).
-  // Cada sessão contribui com 1 busca, usando o checkin da ÚLTIMA consulta_iniciada.
   const consultasPorSessao = useMemo(() => {
     const resultado: TrackingEvent[] = [];
     sessoes.forEach(s => {
@@ -653,7 +732,6 @@ export const AdminPanel: React.FC = () => {
     });
   }, [sessoes]);
 
-  // ========= RENDER =========
   if (loading) return <div className="text-center p-8">Carregando...</div>;
   if (error) return <div className="text-red-600 p-8">{error}</div>;
 
@@ -661,305 +739,567 @@ export const AdminPanel: React.FC = () => {
     ? ((trackingStats.whatsapp / trackingStats.consultas) * 100).toFixed(0)
     : 0;
 
+  const alertasAltaPrioridade = alertasFlutuacao.filter(a => a.prioridade >= 2).length;
+
+  // ========= TAB DEFINITION =========
+  const tabs: Array<{
+    key: typeof activeTab;
+    label: string;
+    icon: string;
+    badge?: number;
+    badgeColor?: string;
+  }> = [
+    { key: 'dashboard', label: 'Dashboard Executivo', icon: '📊' },
+    {
+      key: 'demanda',
+      label: 'Demanda & Tarifa',
+      icon: '🌡️',
+      badge: alertasAltaPrioridade > 0 ? alertasAltaPrioridade : undefined,
+      badgeColor: 'bg-rose-500',
+    },
+    {
+      key: 'jornadas',
+      label: 'Jornadas & Pipeline',
+      icon: '🧑‍💻',
+      badge: filaRecuperacao.length > 0 ? filaRecuperacao.length : undefined,
+      badgeColor: 'bg-amber-500',
+    },
+    { key: 'conversas', label: 'Conversas', icon: '💬' },
+  ];
+
   return (
-    <div className="container mx-auto px-4 py-6 max-w-7xl">
-      <header className="bg-[#1e293b] text-white p-4 rounded-lg mb-4 flex justify-between items-center flex-wrap gap-3">
-        <h1 className="text-2xl font-bold">🏨 Painel Administrativo</h1>
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="bg-white/20 px-4 py-2 rounded hover:bg-white/30 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isRefreshing ? '🔄 Atualizando...' : '🔄 Atualizar'}
-          </button>
-          <button onClick={exportCSV} className="bg-white/20 px-4 py-2 rounded hover:bg-white/30">
-            📥 CSV
-          </button>
-        </div>
-      </header>
-
-      {pendenciasAntigas.length > 0 && (
-        <div className="bg-amber-50 border-l-4 border-amber-500 p-3 mb-4 rounded-r-lg flex justify-between items-center flex-wrap gap-2">
-          <span className="text-sm text-amber-900">
-            ⚠️ <strong>{pendenciasAntigas.length}</strong> sessão(ões) com WhatsApp enviado há mais de 48h sem status de reserva.
-          </span>
-          <button
-            onClick={() => {
-              const el = document.getElementById('fila-recuperacao');
-              el?.scrollIntoView({ behavior: 'smooth' });
-            }}
-            className="text-xs bg-amber-500 text-white px-3 py-1.5 rounded hover:bg-amber-600"
-          >
-            Ver fila
-          </button>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Conversas" value={stats.total} />
-        <StatCard label="Mensagens" value={stats.msgs.toLocaleString()} />
-        <StatCard label="Hoje" value={stats.today} />
-        <StatCard label="Média" value={stats.avg.toFixed(1)} suffix=" msg/conv" />
-      </div>
-
-      <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">💰 Resultado Comercial</h2>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-emerald-500">
-          <div className="text-2xl font-bold text-emerald-700">{kpisFechamento.confirmadas}</div>
-          <div className="text-xs text-gray-600">Reservas confirmadas</div>
-        </div>
-        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-rose-500">
-          <div className="text-2xl font-bold text-rose-700">{kpisFechamento.perdidas}</div>
-          <div className="text-xs text-gray-600">Reservas perdidas</div>
-        </div>
-        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-indigo-500">
-          <div className="text-2xl font-bold text-indigo-700">{kpisFechamento.taxa}%</div>
-          <div className="text-xs text-gray-600">Taxa de fechamento</div>
-          <div className="text-[10px] text-slate-400">WhatsApp → Reserva</div>
-        </div>
-        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-500">
-          <div className="text-2xl font-bold text-yellow-700">{formatCurrency(ticketMedio)}</div>
-          <div className="text-xs text-gray-600">Ticket médio</div>
-        </div>
-        <div className="bg-white rounded-lg shadow p-4 border-l-4 border-emerald-700">
-          <div className="text-2xl font-bold text-emerald-700">{formatCurrency(kpisFechamento.receita)}</div>
-          <div className="text-xs text-gray-600">Receita total</div>
-          <div className="text-[10px] text-slate-400">
-            {kpisFechamento.cicloMedio > 0
-              ? `Ciclo médio: ${kpisFechamento.cicloMedio.toFixed(1)}d (${kpisFechamento.cicloAmostra})`
-              : 'Ciclo médio: —'}
+    <div className="min-h-screen bg-slate-50">
+      <div className="container mx-auto px-4 py-6 max-w-7xl">
+        {/* Header */}
+        <header className="bg-slate-900 text-white px-6 py-4 rounded-xl mb-6 flex justify-between items-center flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">🏨 Painel Administrativo</h1>
+            <p className="text-xs text-slate-400 mt-0.5">Hotel Granja Brasil · Itaipava</p>
           </div>
-        </div>
-      </div>
-
-      <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📈 Funil de Conversão</h2>
-      <div className="bg-white rounded-lg shadow p-4 mb-6">
-        <div className="flex justify-between items-center mb-2">
-          <span className="text-sm text-gray-600">Taxa de conversão (consulta → WhatsApp)</span>
-          <span className="text-lg font-bold text-[#1e293b]">{conversionRate}%</span>
-        </div>
-        <div className="w-full bg-gray-200 rounded-full h-2.5">
-          <div className="bg-[#1e293b] h-2.5 rounded-full" style={{ width: `${Math.min(Number(conversionRate), 100)}%` }}></div>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-9 gap-3 mt-4">
-          <TrackingCard label="Consultas" value={trackingStats.consultas} />
-          <TrackingCard label="Sucesso" value={trackingStats.sucesso} />
-          <TrackingCard label="Sem Disp." value={trackingStats.vazias} />
-          <TrackingCard label="Carrinho" value={trackingStats.carrinho} />
-          <TrackingCard label="Orçamento" value={trackingStats.orcamento} color="gold" />
-          <TrackingCard label="WhatsApp" value={trackingStats.whatsapp} color="gold" />
-          <TrackingCard label="Abandonos" value={trackingStats.abandono} color="red" />
-          <TrackingCard label="Reservas" value={trackingStats.reservas || 0} color="green" />
-          <TrackingCard label="Perdas" value={trackingStats.perdas || 0} color="red" />
-        </div>
-        <p className="text-[10px] text-slate-400 mt-3">
-          Todas as contagens acima são de <strong>sessões únicas</strong>. Consultas = sessões que iniciaram pelo menos 1 busca.
-        </p>
-      </div>
-
-      <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📊 Demanda × Ocupação × Preço</h2>
-      <div className="bg-white rounded-lg shadow p-4 mb-6">
-        {loadingOcupacao ? (
-          <div className="text-center py-6 text-slate-500 text-sm">Carregando dados de ocupação...</div>
-        ) : ocupacao.length === 0 ? (
-          <div className="text-center py-6 text-slate-500 text-sm">
-            Não foi possível carregar dados de ocupação da API.
-            {ocupacaoRange && <span className="block text-xs mt-1">Range: {ocupacaoRange.start} → {ocupacaoRange.end}</span>}
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isRefreshing ? '🔄 Atualizando...' : '🔄 Atualizar'}
+            </button>
+            <button
+              onClick={exportCSV}
+              className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              📥 CSV
+            </button>
           </div>
-        ) : (
-          <OcupacaoTable ocupacao={ocupacao} sessoes={sessoes} />
+        </header>
+
+        {/* Banner de pendências */}
+        {pendenciasAntigas.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 px-4 py-3 mb-6 rounded-xl flex justify-between items-center flex-wrap gap-2">
+            <span className="text-sm text-amber-900">
+              ⚠️ <strong>{pendenciasAntigas.length}</strong> sessão(ões) com WhatsApp enviado há mais de 48h sem status de reserva.
+            </span>
+            <button
+              onClick={() => {
+                setActiveTab('jornadas');
+                setTimeout(() => {
+                  const el = document.getElementById('fila-recuperacao');
+                  el?.scrollIntoView({ behavior: 'smooth' });
+                }, 50);
+              }}
+              className="text-xs bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg font-medium transition-colors"
+            >
+              Ver fila
+            </button>
+          </div>
         )}
-      </div>
 
-      {leadTimeData.length > 0 && (
-        <>
-          <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">⏱️ Análise por Antecedência</h2>
-          <div className="bg-white rounded-lg shadow p-4 mb-6">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-100 text-slate-700">
-                  <th className="px-3 py-2 text-left">Faixa (check-in − busca)</th>
-                  <th className="px-3 py-2 text-center">Buscas</th>
-                  <th className="px-3 py-2 text-center">Conversão WhatsApp</th>
-                  <th className="px-3 py-2 text-center">Taxa de Fechamento</th>
-                </tr>
-              </thead>
-              <tbody>
-                {leadTimeData.map((row, i) => (
-                  <tr key={i} className="border-b border-slate-100">
-                    <td className="px-3 py-2 font-medium">{row.faixa}</td>
-                    <td className="px-3 py-2 text-center">{row.buscas}</td>
-                    <td className="px-3 py-2 text-center">
-                      <span className="text-indigo-700 font-semibold">{row.taxaWhats}%</span>
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <span className="text-emerald-700 font-semibold">{row.taxaFech}%</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="text-xs text-slate-400 mt-3">
-              Leads com maior antecedência tendem a comparar mais. Leads próximos ao check-in decidem por urgência.
-            </p>
-          </div>
-        </>
-      )}
-
-      {abandonoPorValor.length > 0 && (
-        <>
-          <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">
-            💸 Abandono do Carrinho por Faixa de Preço
-          </h2>
-          <div className="bg-white rounded-lg shadow p-4 mb-6">
-            <div className="space-y-3">
-              {abandonoPorValor.map((bin, i) => {
-                const maxTotal = Math.max(...abandonoPorValor.map(b => b.total), 1);
-                const widthTotal = (bin.total / maxTotal) * 100;
-                const abandono = bin.taxaAbandono;
-                const cor =
-                  abandono >= 70 ? 'bg-red-600'
-                  : abandono >= 50 ? 'bg-orange-500'
-                  : abandono >= 30 ? 'bg-amber-400'
-                  : 'bg-emerald-500';
-                return (
-                  <div key={i}>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="font-medium">{bin.label}</span>
-                      <span className="text-slate-500">
-                        {bin.total} carrinho{bin.total === 1 ? '' : 's'} ·{' '}
-                        {bin.taxaWhats}% foram ao WhatsApp ·{' '}
-                        {abandono}% abandonaram
-                      </span>
-                    </div>
-                    <div className="w-full bg-slate-100 rounded-full h-3">
-                      <div className={`h-3 rounded-full ${cor}`} style={{ width: `${widthTotal}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <p className="text-xs text-slate-400 mt-4">
-              Universo: sessões que adicionaram uma acomodação ao carrinho. Abandono = não chegaram a enviar o pedido pelo WhatsApp. Faixa determinada pelo último valor visto (orçamento ou WhatsApp). Sessões que abandonaram antes de ver qualquer valor aparecem em "Sem orçamento visto".
-            </p>
-          </div>
-        </>
-      )}
-
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📊 Mapa de Calor de Buscas</h2>
-        {(() => {
-          // 🔥 CORREÇÃO: usar sessões únicas (última consulta_iniciada de cada sessão)
-          // para alinhar com o card "Consultas" do funil.
-          const consultas = consultasPorSessao;
-          if (consultas.length === 0) {
+        {/* Tabs */}
+        <div className="bg-white border border-slate-200 rounded-xl mb-6 p-1.5 flex gap-1 overflow-x-auto">
+          {tabs.map(tab => {
+            const isActive = activeTab === tab.key;
             return (
-              <div className="bg-white rounded-lg shadow p-6 text-center text-slate-500">
-                Nenhuma consulta de disponibilidade registrada ainda.
-              </div>
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`flex-1 min-w-fit flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                  isActive
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <span>{tab.icon}</span>
+                <span>{tab.label}</span>
+                {tab.badge !== undefined && (
+                  <span className={`${tab.badgeColor} text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center`}>
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
             );
-          }
-          const freqMap: Record<string, { checkin: string; checkout: string; adultos: number; criancas: number; count: number }> = {};
-          consultas.forEach(ev => {
-            const { checkin, checkout, adultos = 0, criancas = 0 } = ev.data;
-            if (!checkin) return;
-            if (!freqMap[checkin]) freqMap[checkin] = { checkin, checkout, adultos, criancas, count: 0 };
-            freqMap[checkin].count += 1;
-          });
-          const freqArray = Object.values(freqMap).sort((a, b) => b.count - a.count);
-          const allDates = consultas.map(ev => ev.data.checkin).filter(Boolean);
-          const monthCount: Record<string, number> = {};
-          allDates.forEach((d: string) => {
-            const parts = d.split('-');
-            if (parts.length === 3) {
-              const k = `${parts[0]}-${parts[1]}`;
-              monthCount[k] = (monthCount[k] || 0) + 1;
-            }
-          });
-          let busiestMonth = '';
-          let maxCount = 0;
-          for (const [m, c] of Object.entries(monthCount)) {
-            if (c > maxCount) { maxCount = c; busiestMonth = m; }
-          }
-          if (!busiestMonth) {
-            const now = new Date();
-            busiestMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-          }
-          const monthNamesFull = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-          const monthKeysSet = new Set(Object.keys(monthCount));
-          if (heatmapMonth && /^\d{4}-\d{2}$/.test(heatmapMonth)) monthKeysSet.add(heatmapMonth);
-          const availableMonths = Array.from(monthKeysSet).sort().reverse();
-          const displayedMonth = heatmapMonth && monthKeysSet.has(heatmapMonth) ? heatmapMonth : busiestMonth;
-          const [year, month] = displayedMonth.split('-').map(Number);
-          const firstDay = new Date(year, month - 1, 1).getDay();
-          const daysInMonth = new Date(year, month, 0).getDate();
-          const dayFreq: Record<number, number> = {};
-          consultas.forEach(ev => {
-            const d = ev.data.checkin;
-            if (!d) return;
-            const [y, m, day] = d.split('-').map(Number);
-            if (y === year && m === month) dayFreq[day] = (dayFreq[day] || 0) + 1;
-          });
-          const maxFreq = Math.max(...Object.values(dayFreq), 1);
-          const getColor = (freq: number) => {
-            if (freq === 0) return 'bg-slate-100';
-            const i = Math.min(1, freq / maxFreq);
-            if (i <= 0.2) return 'bg-yellow-100';
-            if (i <= 0.4) return 'bg-yellow-300';
-            if (i <= 0.6) return 'bg-orange-300';
-            if (i <= 0.8) return 'bg-orange-500 text-white';
-            return 'bg-red-600 text-white';
-          };
-          const monthName = monthNamesFull[month - 1];
-          return (
-            <div className="bg-white rounded-lg shadow p-4 space-y-6">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-indigo-50 p-3 rounded-lg text-center">
-                  <div className="text-2xl font-bold text-indigo-700">{consultas.length}</div>
-                  <div className="text-xs text-indigo-600">Total de buscas (sessões)</div>
-                </div>
-                <div className="bg-emerald-50 p-3 rounded-lg text-center">
-                  <div className="text-2xl font-bold text-emerald-700">{freqArray.length}</div>
-                  <div className="text-xs text-emerald-600">Datas únicas</div>
-                </div>
-                <div className="bg-amber-50 p-3 rounded-lg text-center">
-                  <div className="text-2xl font-bold text-amber-700">{freqArray[0]?.count || 0}</div>
-                  <div className="text-xs text-amber-600">Pico de buscas (dia)</div>
-                </div>
-                <div className="bg-rose-50 p-3 rounded-lg text-center">
-                  <div className="text-2xl font-bold text-rose-700">{monthName}</div>
-                  <div className="text-xs text-rose-600">Mês mais quente</div>
-                </div>
-              </div>
+          })}
+        </div>
 
+        {/* ============= TAB 1: DASHBOARD EXECUTIVO ============= */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            {/* KPIs de conversas */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="Conversas" value={stats.total} />
+              <StatCard label="Mensagens" value={stats.msgs.toLocaleString()} />
+              <StatCard label="Hoje" value={stats.today} />
+              <StatCard label="Média" value={stats.avg.toFixed(1)} suffix=" msg/conv" />
+            </div>
+
+            {/* Revenue Alerts compacto */}
+            {alertasFlutuacao.filter(a => a.prioridade >= 2).length > 0 && (
+              <RevenueAlerts
+                alertas={alertasFlutuacao}
+                limit={3}
+                title="⚡ Ações Imediatas de Tarifa"
+                onVerTodas={() => setActiveTab('demanda')}
+              />
+            )}
+
+            {/* KPIs comerciais */}
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 mb-3">💰 Resultado Comercial</h2>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <ExecCard
+                  label="Reservas confirmadas"
+                  value={kpisFechamento.confirmadas}
+                  accent="emerald"
+                  icon="✅"
+                />
+                <ExecCard
+                  label="Reservas perdidas"
+                  value={kpisFechamento.perdidas}
+                  accent="rose"
+                  icon="❌"
+                />
+                <ExecCard
+                  label="Taxa de fechamento"
+                  value={`${kpisFechamento.taxa}%`}
+                  sub="WhatsApp → Reserva"
+                  accent="indigo"
+                  icon="📈"
+                />
+                <ExecCard
+                  label="ADR (média/noite)"
+                  value={formatCurrency(adr)}
+                  sub={`Proxy ${formatCurrency(adrProxy)}`}
+                  accent="amber"
+                  icon="🏷️"
+                />
+                <ExecCard
+                  label="Receita total"
+                  value={formatCurrency(kpisFechamento.receita)}
+                  sub={
+                    kpisFechamento.cicloMedio > 0
+                      ? `Ciclo médio: ${kpisFechamento.cicloMedio.toFixed(1)}d (${kpisFechamento.cicloAmostra})`
+                      : 'Ciclo médio: —'
+                  }
+                  accent="emerald"
+                  icon="💵"
+                />
+              </div>
+            </div>
+
+            {/* Funil */}
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 mb-3">📈 Funil de Conversão</h2>
+              <div className="bg-white border border-slate-200 rounded-xl p-5">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-sm text-slate-600">Taxa de conversão (consulta → WhatsApp)</span>
+                  <span className="text-xl font-bold text-slate-900">{conversionRate}%</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-2.5">
+                  <div
+                    className="bg-slate-900 h-2.5 rounded-full transition-all"
+                    style={{ width: `${Math.min(Number(conversionRate), 100)}%` }}
+                  ></div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-9 gap-2 mt-5">
+                  <TrackingCard label="Consultas" value={trackingStats.consultas} />
+                  <TrackingCard label="Sucesso" value={trackingStats.sucesso} />
+                  <TrackingCard label="Sem Disp." value={trackingStats.vazias} />
+                  <TrackingCard label="Carrinho" value={trackingStats.carrinho} />
+                  <TrackingCard label="Orçamento" value={trackingStats.orcamento} color="gold" />
+                  <TrackingCard label="WhatsApp" value={trackingStats.whatsapp} color="gold" />
+                  <TrackingCard label="Abandonos" value={trackingStats.abandono} color="red" />
+                  <TrackingCard label="Reservas" value={trackingStats.reservas || 0} color="green" />
+                  <TrackingCard label="Perdas" value={trackingStats.perdas || 0} color="red" />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-4">
+                  Contagens de <strong>sessões únicas</strong>. Consultas = sessões que iniciaram pelo menos 1 busca.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============= TAB 2: DEMANDA & TARIFA ============= */}
+        {activeTab === 'demanda' && (
+          <div className="space-y-6">
+            {/* Alerta de tarifa completo */}
+            {alertasFlutuacao.length > 0 && (
+              <RevenueAlerts alertas={alertasFlutuacao} limit={12} title="⚡ Sugestões de Flutuação de Tarifa" />
+            )}
+
+            {/* Demanda x Ocupação */}
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 mb-3">📅 Demanda × Ocupação × Preço</h2>
+              <div className="bg-white border border-slate-200 rounded-xl p-5">
+                {loadingOcupacao ? (
+                  <div className="text-center py-8 text-slate-500 text-sm">Carregando dados de ocupação...</div>
+                ) : ocupacao.length === 0 ? (
+                  <div className="text-center py-8 text-slate-500 text-sm">
+                    Não foi possível carregar dados de ocupação da API.
+                    {ocupacaoRange && (
+                      <span className="block text-xs mt-1">Range: {ocupacaoRange.start} → {ocupacaoRange.end}</span>
+                    )}
+                  </div>
+                ) : (
+                  <OcupacaoTable ocupacao={ocupacao} sessoes={sessoes} />
+                )}
+              </div>
+            </div>
+
+            {/* Análise por Antecedência */}
+            {leadTimeData.length > 0 && (
               <div>
-                <h3 className="text-md font-semibold text-slate-700 mb-2">📋 Tabela de Frequência por Data de Check‑in</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm border-collapse">
+                <h2 className="text-lg font-semibold text-slate-900 mb-3">⏱️ Análise por Antecedência</h2>
+                <div className="bg-white border border-slate-200 rounded-xl p-5">
+                  <table className="w-full text-sm">
                     <thead>
-                      <tr className="bg-slate-100 text-slate-700">
-                        <th className="px-4 py-2 text-left">Check‑in</th>
-                        <th className="px-4 py-2 text-left">Check‑out</th>
-                        <th className="px-4 py-2 text-left">Hóspedes</th>
-                        <th className="px-4 py-2 text-center">Frequência</th>
-                        <th className="px-4 py-2 text-left">Intensidade</th>
+                      <tr className="border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wide">
+                        <th className="px-3 py-2 text-left font-medium">Faixa (check-in − busca)</th>
+                        <th className="px-3 py-2 text-center font-medium">Buscas</th>
+                        <th className="px-3 py-2 text-center font-medium">Conv. WhatsApp</th>
+                        <th className="px-3 py-2 text-center font-medium">Taxa de Fechamento</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {freqArray.slice(0, 15).map((item, idx) => {
-                        const max = freqArray[0]?.count || 1;
-                        const width = (item.count / max) * 100;
-                        return (
-                          <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
-                            <td className="px-4 py-2 font-medium">{item.checkin}</td>
-                            <td className="px-4 py-2">{item.checkout || '-'}</td>
-                            <td className="px-4 py-2">{item.adultos} adulto(s){item.criancas ? ` + ${item.criancas} criança(s)` : ''}</td>
-                            <td className="px-4 py-2 text-center font-bold">{item.count}</td>
-                            <td className="px-4 py-2">
-                              <div className="w-full bg-slate-200 rounded-full h-2.5">
-                                <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${Math.min(width, 100)}%` }} />
+                      {leadTimeData.map((row, i) => (
+                        <tr key={i} className="border-b border-slate-100 last:border-0">
+                          <td className="px-3 py-2 font-medium text-slate-700">{row.faixa}</td>
+                          <td className="px-3 py-2 text-center text-slate-600">{row.buscas}</td>
+                          <td className="px-3 py-2 text-center">
+                            <span className="text-indigo-600 font-semibold">{row.taxaWhats}%</span>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <span className="text-emerald-600 font-semibold">{row.taxaFech}%</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="text-xs text-slate-400 mt-4">
+                    Leads com maior antecedência tendem a comparar mais. Leads próximos ao check-in decidem por urgência.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Abandono do Carrinho */}
+            {abandonoPorValor.length > 0 && (
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 mb-3">
+                  💸 Abandono do Carrinho por Faixa de Preço
+                </h2>
+                <div className="bg-white border border-slate-200 rounded-xl p-5">
+                  <div className="space-y-4">
+                    {abandonoPorValor.map((bin, i) => {
+                      const maxTotal = Math.max(...abandonoPorValor.map(b => b.total), 1);
+                      const widthTotal = (bin.total / maxTotal) * 100;
+                      const abandono = bin.taxaAbandono;
+                      const cor =
+                        abandono >= 70 ? 'bg-rose-500'
+                        : abandono >= 50 ? 'bg-orange-500'
+                        : abandono >= 30 ? 'bg-amber-400'
+                        : 'bg-emerald-500';
+                      return (
+                        <div key={i}>
+                          <div className="flex justify-between text-xs mb-1.5">
+                            <span className="font-medium text-slate-700">{bin.label}</span>
+                            <span className="text-slate-500">
+                              {bin.total} carrinho{bin.total === 1 ? '' : 's'} ·{' '}
+                              <span className="text-indigo-600 font-semibold">{bin.taxaWhats}%</span> foram ao WhatsApp ·{' '}
+                              <span className={abandono >= 50 ? 'text-rose-600 font-semibold' : 'text-slate-600 font-semibold'}>
+                                {abandono}% abandonaram
+                              </span>
+                            </span>
+                          </div>
+                          <div className="w-full bg-slate-100 rounded-full h-2.5">
+                            <div className={`h-2.5 rounded-full ${cor} transition-all`} style={{ width: `${widthTotal}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-slate-400 mt-5">
+                    Universo: sessões que adicionaram uma acomodação ao carrinho. Abandono = não chegaram a enviar o pedido pelo WhatsApp. Faixa determinada pelo último valor visto (orçamento ou WhatsApp). Sessões que abandonaram antes de ver qualquer valor aparecem em "Sem orçamento visto".
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Mapa de Calor */}
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 mb-3">🗺️ Mapa de Calor de Buscas</h2>
+              {(() => {
+                const consultas = consultasPorSessao;
+                if (consultas.length === 0) {
+                  return (
+                    <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-500 text-sm">
+                      Nenhuma consulta de disponibilidade registrada ainda.
+                    </div>
+                  );
+                }
+                const freqMap: Record<string, { checkin: string; checkout: string; adultos: number; criancas: number; count: number }> = {};
+                consultas.forEach(ev => {
+                  const { checkin, checkout, adultos = 0, criancas = 0 } = ev.data;
+                  if (!checkin) return;
+                  if (!freqMap[checkin]) freqMap[checkin] = { checkin, checkout, adultos, criancas, count: 0 };
+                  freqMap[checkin].count += 1;
+                });
+                const freqArray = Object.values(freqMap).sort((a, b) => b.count - a.count);
+                const allDates = consultas.map(ev => ev.data.checkin).filter(Boolean);
+                const monthCount: Record<string, number> = {};
+                allDates.forEach((d: string) => {
+                  const parts = d.split('-');
+                  if (parts.length === 3) {
+                    const k = `${parts[0]}-${parts[1]}`;
+                    monthCount[k] = (monthCount[k] || 0) + 1;
+                  }
+                });
+                let busiestMonth = '';
+                let maxCount = 0;
+                for (const [m, c] of Object.entries(monthCount)) {
+                  if (c > maxCount) { maxCount = c; busiestMonth = m; }
+                }
+                if (!busiestMonth) {
+                  const now = new Date();
+                  busiestMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                }
+                const monthNamesFull = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+                const monthKeysSet = new Set(Object.keys(monthCount));
+                if (heatmapMonth && /^\d{4}-\d{2}$/.test(heatmapMonth)) monthKeysSet.add(heatmapMonth);
+                const availableMonths = Array.from(monthKeysSet).sort().reverse();
+                const displayedMonth = heatmapMonth && monthKeysSet.has(heatmapMonth) ? heatmapMonth : busiestMonth;
+                const [year, month] = displayedMonth.split('-').map(Number);
+                const firstDay = new Date(year, month - 1, 1).getDay();
+                const daysInMonth = new Date(year, month, 0).getDate();
+                const dayFreq: Record<number, number> = {};
+                consultas.forEach(ev => {
+                  const d = ev.data.checkin;
+                  if (!d) return;
+                  const [y, m, day] = d.split('-').map(Number);
+                  if (y === year && m === month) dayFreq[day] = (dayFreq[day] || 0) + 1;
+                });
+                const maxFreq = Math.max(...Object.values(dayFreq), 1);
+                const getColor = (freq: number) => {
+                  if (freq === 0) return 'bg-slate-50';
+                  const i = Math.min(1, freq / maxFreq);
+                  if (i <= 0.2) return 'bg-yellow-100';
+                  if (i <= 0.4) return 'bg-yellow-300';
+                  if (i <= 0.6) return 'bg-orange-300';
+                  if (i <= 0.8) return 'bg-orange-500 text-white';
+                  return 'bg-rose-500 text-white';
+                };
+                const monthName = monthNamesFull[month - 1];
+                return (
+                  <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-6">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <MiniStat label="Total de buscas" value={consultas.length} accent="indigo" />
+                      <MiniStat label="Datas únicas" value={freqArray.length} accent="emerald" />
+                      <MiniStat
+                        label="Pico de buscas (dia)"
+                        value={freqArray[0]?.count || 0}
+                        sub={freqArray[0]?.checkin}
+                        accent="amber"
+                      />
+                      <MiniStat label="Mês mais quente" value={monthName} accent="rose" />
+                    </div>
+
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-700 mb-3">📋 Top 15 — Frequência por Check-in</h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wide">
+                              <th className="px-3 py-2 text-left font-medium">Check-in</th>
+                              <th className="px-3 py-2 text-left font-medium">Check-out</th>
+                              <th className="px-3 py-2 text-left font-medium">Hóspedes</th>
+                              <th className="px-3 py-2 text-center font-medium">Freq.</th>
+                              <th className="px-3 py-2 text-left font-medium w-48">Intensidade</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {freqArray.slice(0, 15).map((item, idx) => {
+                              const max = freqArray[0]?.count || 1;
+                              const width = (item.count / max) * 100;
+                              return (
+                                <tr key={idx} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50">
+                                  <td className="px-3 py-2 font-medium text-slate-700 font-mono text-xs">{item.checkin}</td>
+                                  <td className="px-3 py-2 text-slate-600 font-mono text-xs">{item.checkout || '-'}</td>
+                                  <td className="px-3 py-2 text-slate-600 text-xs">
+                                    {item.adultos}a{item.criancas ? ` + ${item.criancas}c` : ''}
+                                  </td>
+                                  <td className="px-3 py-2 text-center font-bold text-slate-900">{item.count}</td>
+                                  <td className="px-3 py-2">
+                                    <div className="w-full bg-slate-100 rounded-full h-2">
+                                      <div
+                                        className="bg-indigo-500 h-2 rounded-full transition-all"
+                                        style={{ width: `${Math.min(width, 100)}%` }}
+                                      />
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+                        <h3 className="text-sm font-semibold text-slate-700">
+                          🗓️ Mapa de Calor – {monthName} de {year}
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-slate-500 font-medium">Mês:</label>
+                          <select
+                            value={displayedMonth}
+                            onChange={(e) => setHeatmapMonth(e.target.value)}
+                            className="text-xs bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900 text-slate-700"
+                          >
+                            {availableMonths.map(ym => {
+                              const [y, m] = ym.split('-').map(Number);
+                              const count = monthCount[ym] || 0;
+                              return (
+                                <option key={ym} value={ym}>
+                                  {monthNamesFull[m - 1]} de {y} · {count} busca{count === 1 ? '' : 's'}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                        <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-slate-500 mb-1.5">
+                          <div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div>
+                        </div>
+                        <div className="grid grid-cols-7 gap-1">
+                          {Array.from({ length: firstDay }).map((_, idx) => (
+                            <div key={`e-${idx}`} className="aspect-square bg-transparent rounded" />
+                          ))}
+                          {Array.from({ length: daysInMonth }).map((_, day) => {
+                            const dayNum = day + 1;
+                            const freq = dayFreq[dayNum] || 0;
+                            const colorClass = getColor(freq);
+                            return (
+                              <div
+                                key={dayNum}
+                                className={`aspect-square flex items-center justify-center text-xs rounded-lg font-medium transition-all ${colorClass}`}
+                              >
+                                {dayNum}
+                                {freq > 0 && <span className="ml-0.5 text-[10px] opacity-70">({freq})</span>}
                               </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center justify-end gap-2 mt-4 text-[11px] text-slate-500">
+                          <span>Baixa</span>
+                          <div className="flex gap-0.5">
+                            <div className="w-3.5 h-3.5 bg-yellow-100 rounded"></div>
+                            <div className="w-3.5 h-3.5 bg-yellow-300 rounded"></div>
+                            <div className="w-3.5 h-3.5 bg-orange-300 rounded"></div>
+                            <div className="w-3.5 h-3.5 bg-orange-500 rounded"></div>
+                            <div className="w-3.5 h-3.5 bg-rose-500 rounded"></div>
+                          </div>
+                          <span>Alta</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* ============= TAB 3: JORNADAS & PIPELINE ============= */}
+        {activeTab === 'jornadas' && (
+          <div className="space-y-6">
+            {/* Fila de Recuperação */}
+            <div id="fila-recuperacao">
+              <h2 className="text-lg font-semibold text-slate-900 mb-3">
+                🔔 Fila de Recuperação
+                {filaRecuperacao.length > 0 && (
+                  <span className="ml-2 text-sm font-normal text-slate-500">({filaRecuperacao.length})</span>
+                )}
+              </h2>
+              {filaRecuperacao.length === 0 ? (
+                <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-500 text-sm">
+                  Nenhuma sessão pendente de follow-up. 🎉
+                </div>
+              ) : (
+                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 border-b border-slate-200">
+                      <tr className="text-slate-500 text-xs uppercase tracking-wide">
+                        <th className="px-4 py-2.5 text-left font-medium">Sessão</th>
+                        <th className="px-4 py-2.5 text-center font-medium">Score</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Valor</th>
+                        <th className="px-4 py-2.5 text-center font-medium">Horas</th>
+                        <th className="px-4 py-2.5 text-left font-medium">Ação sugerida</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filaRecuperacao.slice(0, 20).map(item => {
+                        const scoreColor =
+                          item.score >= 70 ? 'text-rose-700 bg-rose-50'
+                          : item.score >= 50 ? 'text-amber-700 bg-amber-50'
+                          : 'text-slate-600 bg-slate-100';
+                        return (
+                          <tr key={item.sessionId} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50">
+                            <td className="px-4 py-2.5 font-mono text-xs text-slate-600">
+                              {item.sessionId.substring(0, 18)}...
+                            </td>
+                            <td className="px-4 py-2.5 text-center">
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${scoreColor}`}>
+                                {item.score}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-semibold text-slate-800">
+                              {formatCurrency(item.valor)}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-slate-500 text-xs">{item.horas}h</td>
+                            <td className="px-4 py-2.5 text-xs text-slate-600">{item.acao}</td>
+                            <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                              <button
+                                onClick={() => {
+                                  setReservaModal({ sessionId: item.sessionId, acao: 'confirmar', valor: item.valor });
+                                  setReservaForm({ valor: String(item.valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                                }}
+                                className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-md mr-1 transition-colors"
+                                title="Confirmar reserva"
+                              >
+                                ✅
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setReservaModal({ sessionId: item.sessionId, acao: 'perder', valor: item.valor });
+                                  setReservaForm({ valor: String(item.valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                                }}
+                                className="text-xs bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-md transition-colors"
+                                title="Não fechou"
+                              >
+                                ❌
+                              </button>
                             </td>
                           </tr>
                         );
@@ -967,415 +1307,386 @@ export const AdminPanel: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </div>
+
+            {/* Jornadas */}
+            <div>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
+                <h2 className="text-lg font-semibold text-slate-900">🧑‍💻 Jornadas dos Clientes</h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex rounded-lg overflow-hidden border border-slate-200 p-0.5 bg-slate-50">
+                    <button
+                      onClick={() => setViewMode('lista')}
+                      className={`text-xs px-3 py-1.5 rounded-md transition-colors ${
+                        viewMode === 'lista' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      📄 Lista
+                    </button>
+                    <button
+                      onClick={() => setViewMode('kanban')}
+                      className={`text-xs px-3 py-1.5 rounded-md transition-colors ${
+                        viewMode === 'kanban' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      📊 Kanban
+                    </button>
+                  </div>
+                  <label className="text-xs text-slate-500 font-medium">Data:</label>
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={e => setSelectedDate(e.target.value)}
+                    className="text-xs bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-900 text-slate-700"
+                  />
+                  {selectedDate && (
+                    <button
+                      onClick={() => setSelectedDate('')}
+                      className="text-xs text-slate-400 hover:text-slate-600 bg-slate-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                    >
+                      Ver Todas
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div>
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
-                  <h3 className="text-md font-semibold text-slate-700">🗓️ Mapa de Calor – {monthName} de {year}</h3>
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs text-slate-500 font-medium">Mês:</label>
-                    <select
-                      value={displayedMonth}
-                      onChange={(e) => setHeatmapMonth(e.target.value)}
-                      className="text-xs bg-white border border-slate-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-slate-700 shadow-sm"
-                    >
-                      {availableMonths.map(ym => {
-                        const [y, m] = ym.split('-').map(Number);
-                        const count = monthCount[ym] || 0;
-                        return (
-                          <option key={ym} value={ym}>
-                            {monthNamesFull[m - 1]} de {y} · {count} busca{count === 1 ? '' : 's'}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                </div>
-                <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                  <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-slate-500 mb-1">
-                    <div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div>
-                  </div>
-                  <div className="grid grid-cols-7 gap-1">
-                    {Array.from({ length: firstDay }).map((_, idx) => (
-                      <div key={`e-${idx}`} className="aspect-square bg-slate-50 rounded" />
-                    ))}
-                    {Array.from({ length: daysInMonth }).map((_, day) => {
-                      const dayNum = day + 1;
-                      const freq = dayFreq[dayNum] || 0;
-                      const colorClass = getColor(freq);
+              {viewMode === 'kanban' ? (
+                <KanbanView
+                  sessoes={sessoes}
+                  adr={adrProxy}
+                  onMarcarConfirmada={(sid, valor) => {
+                    setReservaModal({ sessionId: sid, acao: 'confirmar', valor });
+                    setReservaForm({ valor: String(valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                  }}
+                  onMarcarPerdida={(sid, valor) => {
+                    setReservaModal({ sessionId: sid, acao: 'perder', valor });
+                    setReservaForm({ valor: String(valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                  }}
+                />
+              ) : (
+                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  {(() => {
+                    const JOURNEY_STEPS = [
+                      { key: 'consulta_iniciada', label: 'Consulta', icon: '🔍' },
+                      { key: 'consulta_sucesso', label: 'Sucesso', icon: '✅' },
+                      { key: 'carrinho_adicionado', label: 'Carrinho', icon: '🛒' },
+                      { key: 'orcamento_visualizado', label: 'Orçamento', icon: '📋' },
+                      { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
+                    ];
+                    const filteredSessions = sessoes.filter(s => !selectedDate || s.eventDates.has(selectedDate));
+                    const sortedSessions = [...filteredSessions].sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
+
+                    if (sortedSessions.length === 0) {
                       return (
-                        <div key={dayNum} className={`aspect-square flex items-center justify-center text-xs rounded font-medium transition-all ${colorClass}`}>
-                          {dayNum}
-                          {freq > 0 && <span className="ml-0.5 text-[10px] opacity-70">({freq})</span>}
+                        <div className="text-slate-500 text-center py-12 text-sm">
+                          <div className="text-3xl mb-2">📅</div>
+                          Nenhuma jornada registrada para {selectedDate ? selectedDate.split('-').reverse().join('/') : 'o período'}.
                         </div>
                       );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-      </div>
-
-      <div id="fila-recuperacao" className="mb-8">
-        <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">
-          🔔 Fila de Recuperação
-          {filaRecuperacao.length > 0 && (
-            <span className="ml-2 text-sm font-normal text-slate-500">({filaRecuperacao.length})</span>
-          )}
-        </h2>
-        {filaRecuperacao.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-6 text-center text-slate-500 text-sm">
-            Nenhuma sessão pendente de follow-up. 🎉
-          </div>
-        ) : (
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-100 text-slate-700">
-                <tr>
-                  <th className="px-3 py-2 text-left">Sessão</th>
-                  <th className="px-3 py-2 text-center">Score</th>
-                  <th className="px-3 py-2 text-right">Valor</th>
-                  <th className="px-3 py-2 text-center">Horas</th>
-                  <th className="px-3 py-2 text-left">Ação sugerida</th>
-                  <th className="px-3 py-2 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filaRecuperacao.slice(0, 20).map(item => {
-                  const scoreColor = item.score >= 70 ? 'text-red-700 bg-red-50' : item.score >= 50 ? 'text-amber-700 bg-amber-50' : 'text-slate-700 bg-slate-50';
-                  return (
-                    <tr key={item.sessionId} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="px-3 py-2 font-mono text-xs">{item.sessionId.substring(0, 18)}...</td>
-                      <td className="px-3 py-2 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${scoreColor}`}>{item.score}</span>
-                      </td>
-                      <td className="px-3 py-2 text-right font-semibold">{formatCurrency(item.valor)}</td>
-                      <td className="px-3 py-2 text-center text-slate-500">{item.horas}h</td>
-                      <td className="px-3 py-2 text-xs text-slate-600">{item.acao}</td>
-                      <td className="px-3 py-2 text-right space-x-1 whitespace-nowrap">
-                        <button
-                          onClick={() => {
-                            setReservaModal({ sessionId: item.sessionId, acao: 'confirmar', valor: item.valor });
-                            setReservaForm({ valor: String(item.valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
-                          }}
-                          className="text-xs bg-emerald-600 text-white px-2 py-1 rounded hover:bg-emerald-700"
-                        >
-                          ✅
-                        </button>
-                        <button
-                          onClick={() => {
-                            setReservaModal({ sessionId: item.sessionId, acao: 'perder', valor: item.valor });
-                            setReservaForm({ valor: String(item.valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
-                          }}
-                          className="text-xs bg-rose-600 text-white px-2 py-1 rounded hover:bg-rose-700"
-                        >
-                          ❌
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-2 mb-4 gap-2">
-        <h2 className="text-xl font-semibold text-[#1e293b]">🧑‍💻 Jornadas dos Clientes</h2>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex rounded-md overflow-hidden border border-slate-300">
-            <button
-              onClick={() => setViewMode('lista')}
-              className={`text-xs px-3 py-1.5 transition-colors ${viewMode === 'lista' ? 'bg-[#1e293b] text-white' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
-            >
-              📄 Lista
-            </button>
-            <button
-              onClick={() => setViewMode('kanban')}
-              className={`text-xs px-3 py-1.5 transition-colors ${viewMode === 'kanban' ? 'bg-[#1e293b] text-white' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
-            >
-              📊 Kanban
-            </button>
-          </div>
-          <label className="text-xs text-slate-500 font-medium">Data:</label>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={e => setSelectedDate(e.target.value)}
-            className="text-xs bg-white border border-slate-300 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 shadow-sm"
-          />
-          {selectedDate && (
-            <button
-              onClick={() => setSelectedDate('')}
-              className="text-xs text-slate-400 hover:text-slate-600 bg-slate-100 px-2 py-1.5 rounded-md"
-            >
-              Ver Todas
-            </button>
-          )}
-        </div>
-      </div>
-
-      {viewMode === 'kanban' ? (
-        <KanbanView
-          sessoes={sessoes}
-          ticketMedio={ticketMedio}
-          onMarcarConfirmada={(sid, valor) => {
-            setReservaModal({ sessionId: sid, acao: 'confirmar', valor });
-            setReservaForm({ valor: String(valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
-          }}
-          onMarcarPerdida={(sid, valor) => {
-            setReservaModal({ sessionId: sid, acao: 'perder', valor });
-            setReservaForm({ valor: String(valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
-          }}
-        />
-      ) : (
-        <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
-          {(() => {
-            const JOURNEY_STEPS = [
-              { key: 'consulta_iniciada', label: 'Consulta', icon: '🔍' },
-              { key: 'consulta_sucesso', label: 'Sucesso', icon: '✅' },
-              { key: 'carrinho_adicionado', label: 'Carrinho', icon: '🛒' },
-              { key: 'orcamento_visualizado', label: 'Orçamento', icon: '📋' },
-              { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
-            ];
-            const filteredSessions = sessoes.filter(s => !selectedDate || s.eventDates.has(selectedDate));
-            const sortedSessions = [...filteredSessions].sort((a, b) => b.lastTimestampMs - a.lastTimestampMs);
-
-            if (sortedSessions.length === 0) {
-              return (
-                <div className="text-gray-500 text-center py-12">
-                  <div className="text-3xl mb-2">📅</div>
-                  Nenhuma jornada registrada para {selectedDate ? selectedDate.split('-').reverse().join('/') : 'o período'}.
-                </div>
-              );
-            }
-            const totalSessions = sortedSessions.length;
-            const confirmadasCount = sortedSessions.filter(s => s.statusFinal === 'confirmada').length;
-            const perdidasCount = sortedSessions.filter(s => s.statusFinal === 'perdida').length;
-
-            return (
-              <>
-                <div className="bg-slate-50 px-5 py-2.5 border-b border-slate-200 text-xs text-slate-600 flex flex-wrap gap-4 items-center justify-between">
-                  <div>
-                    Exibindo <strong>{totalSessions}</strong> sessão(ões){' '}
-                    {selectedDate ? `para o dia ${selectedDate.split('-').reverse().join('/')}` : 'no total'}.
-                  </div>
-                  <div className="flex gap-3">
-                    <span className="text-emerald-700 font-medium">✅ {confirmadasCount} Confirmadas</span>
-                    <span className="text-rose-700 font-medium">❌ {perdidasCount} Perdidas</span>
-                    <span className="text-blue-700 font-medium">🔄 {totalSessions - confirmadasCount - perdidasCount} Pendentes</span>
-                  </div>
-                </div>
-
-                <div className="divide-y divide-gray-100">
-                  {sortedSessions.map(sessao => {
-                    const { sessionId, eventos, lastTimestampMs, statusFinal } = sessao;
-                    const shortId = sessionId.length > 20 ? `${sessionId.substring(0, 10)}...` : sessionId;
-                    const score = calcularLeadScore(sessao, ticketMedio);
-
-                    let status = '🔄 Pendente';
-                    let statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
-                    if (statusFinal === 'confirmada') {
-                      status = '✅ Reserva Confirmada';
-                      statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                    } else if (statusFinal === 'perdida') {
-                      status = '❌ Não Fechou';
-                      statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
-                    } else if (eventos.some(e => e.event === 'whatsapp_enviado')) {
-                      status = '💬 Aguardando fechamento';
-                      statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
-                    } else if (eventos.some(e => e.event === 'carrinho_adicionado')) {
-                      status = '🛒 No carrinho';
-                      statusColor = 'bg-purple-50 text-purple-700 border-purple-200';
                     }
-
-                    const lastTimeStr = lastTimestampMs
-                      ? new Date(lastTimestampMs).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
-                      : '';
-                    const consulta = eventos.find(e => e.event === 'consulta_iniciada');
-                    const d = consulta?.data;
+                    const totalSessions = sortedSessions.length;
+                    const confirmadasCount = sortedSessions.filter(s => s.statusFinal === 'confirmada').length;
+                    const perdidasCount = sortedSessions.filter(s => s.statusFinal === 'perdida').length;
 
                     return (
-                      <div key={sessionId} className="p-5 hover:bg-slate-50/50 transition-colors">
-                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-                              {shortId}
-                            </span>
-                            <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusColor}`}>
-                              {status}
-                            </span>
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${score >= 70 ? 'bg-red-100 text-red-700' : score >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
-                              Score {score}
-                            </span>
-                            {d && (
-                              <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-100">
-                                📅 {d.checkin || '-'} até {d.checkout || '-'} • 👥 {d.adultos || 0}a
-                                {d.criancas ? ` + ${d.criancas}c` : ''}
-                              </span>
-                            )}
+                      <>
+                        <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 text-xs text-slate-600 flex flex-wrap gap-4 items-center justify-between">
+                          <div>
+                            Exibindo <strong>{totalSessions}</strong> sessão(ões){' '}
+                            {selectedDate ? `para o dia ${selectedDate.split('-').reverse().join('/')}` : 'no total'}.
                           </div>
-                          <span className="text-xs font-medium text-slate-400">{lastTimeStr}</span>
-                        </div>
-
-                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
-                          <div className="flex items-center justify-between relative">
-                            {JOURNEY_STEPS.map((step, idx) => {
-                              const isCompleted = eventos.some(e => e.event === step.key);
-                              return (
-                                <React.Fragment key={step.key}>
-                                  <div className="flex flex-col items-center z-10">
-                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${isCompleted ? 'bg-indigo-600 text-white shadow-sm ring-4 ring-indigo-50' : 'bg-slate-200 text-slate-400'}`}>
-                                      {step.icon}
-                                    </div>
-                                    <span className={`text-[11px] mt-1 font-medium ${isCompleted ? 'text-slate-800' : 'text-slate-400'}`}>
-                                      {step.label}
-                                    </span>
-                                  </div>
-                                  {idx < JOURNEY_STEPS.length - 1 && (
-                                    <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
-                                      <div className={`h-full transition-all ${eventos.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key) ? 'bg-indigo-600' : 'bg-transparent'}`} />
-                                    </div>
-                                  )}
-                                </React.Fragment>
-                              );
-                            })}
+                          <div className="flex gap-3">
+                            <span className="text-emerald-700 font-medium">✅ {confirmadasCount} Confirmadas</span>
+                            <span className="text-rose-700 font-medium">❌ {perdidasCount} Perdidas</span>
+                            <span className="text-blue-700 font-medium">
+                              🔄 {totalSessions - confirmadasCount - perdidasCount} Pendentes
+                            </span>
                           </div>
                         </div>
 
-                        <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2 mb-3">
-                          {eventos.map((ev, idx) => {
-                            const evDate = normalizeDate(ev.timestamp);
-                            const eventTime = evDate
-                              ? evDate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })
-                              : '';
-                            let detail = '';
-                            switch (ev.event) {
-                              case 'consulta_iniciada': detail = `Busca para ${ev.data?.adultos || 0} adulto(s)`; break;
-                              case 'consulta_sucesso': detail = `${ev.data?.quartos || 0} quarto(s) disponível(is)`; break;
-                              case 'consulta_vazia': detail = 'Nenhum quarto disponível'; break;
-                              case 'carrinho_adicionado': detail = `${ev.data?.quantidade || 0} item(ns)`; break;
-                              case 'orcamento_visualizado': detail = `Valor: ${formatCurrency(Number(ev.data?.total || 0))}`; break;
-                              case 'whatsapp_enviado': detail = `Contato por ${ev.data?.cliente || 'Cliente'} (${formatCurrency(Number(ev.data?.total || 0))})`; break;
-                              case 'reserva_confirmada': detail = `R$ ${ev.data?.valor_final || 0} · ${ev.data?.categoria || '-'} · ${ev.data?.canal || '-'}`; break;
-                              case 'reserva_perdida': detail = `Motivo: ${ev.data?.motivo || '-'}`; break;
-                              case 'abandono': detail = `Na etapa: ${ev.data?.stage || 'desconhecida'}`; break;
-                              default: detail = typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data || {});
+                        <div className="divide-y divide-slate-100">
+                          {sortedSessions.map(sessao => {
+                            const { sessionId, eventos, lastTimestampMs, statusFinal } = sessao;
+                            const shortId = sessionId.length > 20 ? `${sessionId.substring(0, 10)}...` : sessionId;
+                            const score = calcularLeadScore(sessao, adrProxy);
+
+                            let status = '🔄 Pendente';
+                            let statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
+                            if (statusFinal === 'confirmada') {
+                              status = '✅ Reserva Confirmada';
+                              statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                            } else if (statusFinal === 'perdida') {
+                              status = '❌ Não Fechou';
+                              statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
+                            } else if (eventos.some(e => e.event === 'whatsapp_enviado')) {
+                              status = '💬 Aguardando fechamento';
+                              statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                            } else if (eventos.some(e => e.event === 'carrinho_adicionado')) {
+                              status = '🛒 No carrinho';
+                              statusColor = 'bg-purple-50 text-purple-700 border-purple-200';
                             }
+
+                            const lastTimeStr = lastTimestampMs
+                              ? new Date(lastTimestampMs).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+                              : '';
+                            const consulta = eventos.find(e => e.event === 'consulta_iniciada');
+                            const d = consulta?.data;
+
                             return (
-                              <div key={idx} className="flex items-center justify-between text-xs text-slate-600 hover:text-slate-900">
-                                <div className="flex items-center gap-2">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
-                                  <span className="font-semibold capitalize text-slate-700">{ev.event.replace(/_/g, ' ')}:</span>
-                                  <span className="text-slate-500">{detail}</span>
+                              <div key={sessionId} className="p-5 hover:bg-slate-50/50 transition-colors">
+                                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-mono text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
+                                      {shortId}
+                                    </span>
+                                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusColor}`}>
+                                      {status}
+                                    </span>
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                        score >= 70 ? 'bg-rose-100 text-rose-700'
+                                        : score >= 50 ? 'bg-amber-100 text-amber-700'
+                                        : 'bg-slate-100 text-slate-600'
+                                      }`}
+                                    >
+                                      Score {score}
+                                    </span>
+                                    {d && (
+                                      <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                                        📅 {d.checkin || '-'} até {d.checkout || '-'} • 👥 {d.adultos || 0}a
+                                        {d.criancas ? ` + ${d.criancas}c` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-xs font-medium text-slate-400">{lastTimeStr}</span>
                                 </div>
-                                <span className="text-[10px] text-slate-400 font-mono">{eventTime}</span>
+
+                                <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mb-3">
+                                  <div className="flex items-center justify-between relative">
+                                    {JOURNEY_STEPS.map((step, idx) => {
+                                      const isCompleted = eventos.some(e => e.event === step.key);
+                                      return (
+                                        <React.Fragment key={step.key}>
+                                          <div className="flex flex-col items-center z-10">
+                                            <div
+                                              className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
+                                                isCompleted
+                                                  ? 'bg-slate-900 text-white shadow-sm ring-4 ring-slate-100'
+                                                  : 'bg-slate-200 text-slate-400'
+                                              }`}
+                                            >
+                                              {step.icon}
+                                            </div>
+                                            <span
+                                              className={`text-[11px] mt-1 font-medium ${
+                                                isCompleted ? 'text-slate-800' : 'text-slate-400'
+                                              }`}
+                                            >
+                                              {step.label}
+                                            </span>
+                                          </div>
+                                          {idx < JOURNEY_STEPS.length - 1 && (
+                                            <div className="flex-1 h-[2px] mx-2 -mt-4 bg-slate-200">
+                                              <div
+                                                className={`h-full transition-all ${
+                                                  eventos.some(e => e.event === JOURNEY_STEPS[idx + 1]?.key)
+                                                    ? 'bg-slate-900'
+                                                    : 'bg-transparent'
+                                                }`}
+                                              />
+                                            </div>
+                                          )}
+                                        </React.Fragment>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+
+                                <div className="pl-2 border-l-2 border-slate-100 space-y-1.5 ml-2 mb-3">
+                                  {eventos.map((ev, idx) => {
+                                    const evDate = normalizeDate(ev.timestamp);
+                                    const eventTime = evDate
+                                      ? evDate.toLocaleTimeString('pt-BR', {
+                                          timeZone: 'America/Sao_Paulo',
+                                          hour: '2-digit',
+                                          minute: '2-digit',
+                                        })
+                                      : '';
+                                    let detail = '';
+                                    switch (ev.event) {
+                                      case 'consulta_iniciada': detail = `Busca para ${ev.data?.adultos || 0} adulto(s)`; break;
+                                      case 'consulta_sucesso': detail = `${ev.data?.quartos || 0} quarto(s) disponível(is)`; break;
+                                      case 'consulta_vazia': detail = 'Nenhum quarto disponível'; break;
+                                      case 'carrinho_adicionado': detail = `${ev.data?.quantidade || 0} item(ns)`; break;
+                                      case 'orcamento_visualizado': detail = `Valor: ${formatCurrency(Number(ev.data?.total || 0))}`; break;
+                                      case 'whatsapp_enviado': detail = `Contato por ${ev.data?.cliente || 'Cliente'} (${formatCurrency(Number(ev.data?.total || 0))})`; break;
+                                      case 'reserva_confirmada': detail = `R$ ${ev.data?.valor_final || 0} · ${ev.data?.categoria || '-'} · ${ev.data?.canal || '-'}`; break;
+                                      case 'reserva_perdida': detail = `Motivo: ${ev.data?.motivo || '-'}`; break;
+                                      case 'abandono': detail = `Na etapa: ${ev.data?.stage || 'desconhecida'}`; break;
+                                      default: detail = typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data || {});
+                                    }
+                                    return (
+                                      <div key={idx} className="flex items-center justify-between text-xs text-slate-600">
+                                        <div className="flex items-center gap-2">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                                          <span className="font-semibold capitalize text-slate-700">
+                                            {ev.event.replace(/_/g, ' ')}:
+                                          </span>
+                                          <span className="text-slate-500">{detail}</span>
+                                        </div>
+                                        <span className="text-[10px] text-slate-400 font-mono">{eventTime}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                {eventos.some(e => e.event === 'whatsapp_enviado') && statusFinal === 'pendente' && (
+                                  <div className="flex gap-2 pt-2 border-t border-slate-100">
+                                    <button
+                                      onClick={() => {
+                                        setReservaModal({ sessionId, acao: 'confirmar', valor: sessao.valorCotado });
+                                        setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                                      }}
+                                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition-colors"
+                                    >
+                                      ✅ Marcar Reserva Confirmada
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setReservaModal({ sessionId, acao: 'perder', valor: sessao.valorCotado });
+                                        setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                                      }}
+                                      className="flex-1 bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition-colors"
+                                    >
+                                      ❌ Não Fechou
+                                    </button>
+                                  </div>
+                                )}
+
+                                {statusFinal !== 'pendente' && (
+                                  <div className="pt-2 border-t border-slate-100 flex gap-2">
+                                    <button
+                                      onClick={() => {
+                                        setReservaModal({
+                                          sessionId,
+                                          acao: statusFinal === 'confirmada' ? 'perder' : 'confirmar',
+                                          valor: sessao.valorCotado,
+                                        });
+                                        setReservaForm({
+                                          valor: String(sessao.valorCotado || ''),
+                                          categoria: 'SEN',
+                                          canal: 'whatsapp',
+                                          motivo: 'preco',
+                                        });
+                                      }}
+                                      className="text-xs text-slate-500 hover:text-slate-800 underline"
+                                    >
+                                      Alterar status
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
                         </div>
-
-                        {eventos.some(e => e.event === 'whatsapp_enviado') && statusFinal === 'pendente' && (
-                          <div className="flex gap-2 pt-2 border-t border-slate-100">
-                            <button
-                              onClick={() => {
-                                setReservaModal({ sessionId, acao: 'confirmar', valor: sessao.valorCotado });
-                                setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
-                              }}
-                              className="flex-1 bg-emerald-600 text-white px-3 py-2 rounded text-xs font-medium hover:bg-emerald-700"
-                            >
-                              ✅ Marcar Reserva Confirmada
-                            </button>
-                            <button
-                              onClick={() => {
-                                setReservaModal({ sessionId, acao: 'perder', valor: sessao.valorCotado });
-                                setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
-                              }}
-                              className="flex-1 bg-rose-600 text-white px-3 py-2 rounded text-xs font-medium hover:bg-rose-700"
-                            >
-                              ❌ Não Fechou
-                            </button>
-                          </div>
-                        )}
-
-                        {statusFinal !== 'pendente' && (
-                          <div className="pt-2 border-t border-slate-100 flex gap-2">
-                            <button
-                              onClick={() => {
-                                setReservaModal({ sessionId, acao: statusFinal === 'confirmada' ? 'perder' : 'confirmar', valor: sessao.valorCotado });
-                                setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
-                              }}
-                              className="text-xs text-slate-500 hover:text-slate-800 underline"
-                            >
-                              Alterar status
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      </>
                     );
-                  })}
+                  })()}
                 </div>
-              </>
-            );
-          })()}
-        </div>
-      )}
-
-      <h2 className="text-xl font-semibold text-[#1e293b] border-b pb-2 mb-4">📋 Conversas</h2>
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="grid grid-cols-5 bg-gray-100 p-3 font-semibold text-sm">
-          <span>ID</span><span>Mensagens</span><span>Última Atualização</span><span>Origem</span><span>Ações</span>
-        </div>
-        {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => {
-          const parsedConvDate = normalizeDate(conv.last_updated);
-          const formattedDate = parsedConvDate
-            ? parsedConvDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
-            : 'Data não disponível';
-          return (
-            <div key={conv.id} className="grid grid-cols-5 p-3 border-b hover:bg-gray-50 items-center text-sm">
-              <span className="font-mono text-xs text-[#1e293b] truncate">{conv.id.substring(0, 20)}...</span>
-              <span>{conv.total_messages}</span>
-              <span className="text-gray-600 text-xs">{formattedDate}</span>
-              <span>{conv.source}</span>
-              <button
-                onClick={() => handleViewConversation(conv.id)}
-                className="bg-[#1e293b] text-white px-2 py-1 rounded text-xs hover:bg-[#2d3a4f]"
-              >
-                Ver Conversa
-              </button>
+              )}
             </div>
-          );
-        })}
+          </div>
+        )}
+
+        {/* ============= TAB 4: CONVERSAS ============= */}
+        {activeTab === 'conversas' && (
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-3">
+              💬 Conversas
+              <span className="ml-2 text-sm font-normal text-slate-500">({filtered.length})</span>
+            </h2>
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div className="grid grid-cols-5 gap-2 bg-slate-50 px-4 py-3 text-xs uppercase tracking-wide text-slate-500 font-medium border-b border-slate-200">
+                <span>ID</span>
+                <span>Mensagens</span>
+                <span>Última Atualização</span>
+                <span>Origem</span>
+                <span className="text-right">Ações</span>
+              </div>
+              {filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(conv => {
+                const parsedConvDate = normalizeDate(conv.last_updated);
+                const formattedDate = parsedConvDate
+                  ? parsedConvDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+                  : 'Data não disponível';
+                return (
+                  <div
+                    key={conv.id}
+                    className="grid grid-cols-5 gap-2 px-4 py-3 border-b border-slate-100 last:border-0 hover:bg-slate-50/50 items-center text-sm"
+                  >
+                    <span className="font-mono text-xs text-slate-700 truncate">{conv.id.substring(0, 20)}...</span>
+                    <span className="text-slate-700">{conv.total_messages}</span>
+                    <span className="text-slate-500 text-xs">{formattedDate}</span>
+                    <span className="text-slate-600 text-xs">{conv.source}</span>
+                    <div className="text-right">
+                      <button
+                        onClick={() => handleViewConversation(conv.id)}
+                        className="bg-slate-900 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                      >
+                        Ver Conversa
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {filtered.length > pageSize && (
+              <div className="flex justify-center items-center gap-2 mt-5">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm disabled:opacity-40 hover:bg-slate-100 transition-colors"
+                >
+                  ◀
+                </button>
+                <span className="px-4 py-1.5 text-sm text-slate-600">
+                  {currentPage} de {Math.ceil(filtered.length / pageSize)}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))}
+                  disabled={currentPage === Math.ceil(filtered.length / pageSize)}
+                  className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm disabled:opacity-40 hover:bg-slate-100 transition-colors"
+                >
+                  ▶
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {filtered.length > pageSize && (
-        <div className="flex justify-center gap-2 mt-4">
-          <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 border rounded disabled:opacity-50">◀</button>
-          <span className="px-3 py-1">{currentPage} de {Math.ceil(filtered.length / pageSize)}</span>
-          <button
-            onClick={() => setCurrentPage(p => Math.min(Math.ceil(filtered.length / pageSize), p + 1))}
-            disabled={currentPage === Math.ceil(filtered.length / pageSize)}
-            className="px-3 py-1 border rounded disabled:opacity-50"
-          >▶</button>
-        </div>
-      )}
-
+      {/* ============= MODAIS ============= */}
       {selectedConvId && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden border border-slate-100">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
             <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
-              <div>
+              <div className="min-w-0">
                 <h3 className="font-semibold text-sm">Conversa Detalhada</h3>
                 <p className="font-mono text-xs text-slate-300 truncate max-w-md">{selectedConvId}</p>
               </div>
-              <button onClick={() => setSelectedConvId(null)} className="text-slate-400 hover:text-white p-1 rounded-lg text-lg leading-none">✕</button>
+              <button
+                onClick={() => setSelectedConvId(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg text-lg leading-none ml-2 flex-shrink-0"
+              >
+                ✕
+              </button>
             </div>
             <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-slate-50 min-h-[300px]">
               {loadingConv ? (
-                <div className="flex justify-center items-center h-48 text-slate-500 text-sm">Carregando mensagens...</div>
+                <div className="flex justify-center items-center h-48 text-slate-500 text-sm">
+                  Carregando mensagens...
+                </div>
               ) : convMessages.length === 0 ? (
                 <div className="text-center py-12 text-slate-400 text-sm">Nenhuma mensagem encontrada.</div>
               ) : (
@@ -1384,13 +1695,25 @@ export const AdminPanel: React.FC = () => {
                   const parsedMsgDate = normalizeDate(msg.timestamp);
                   return (
                     <div key={idx} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
-                      <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${isUser ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
-                        <div className="font-semibold text-[10px] mb-1 opacity-75">{isUser ? '👤 Cliente' : '🤖 Assistente'}</div>
+                      <div
+                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-sm ${
+                          isUser
+                            ? 'bg-indigo-600 text-white rounded-br-none'
+                            : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
+                        }`}
+                      >
+                        <div className="font-semibold text-[10px] mb-1 opacity-75">
+                          {isUser ? '👤 Cliente' : '🤖 Assistente'}
+                        </div>
                         <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
                       </div>
                       {parsedMsgDate && (
                         <span className="text-[10px] text-slate-400 mt-1 px-1">
-                          {parsedMsgDate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })}
+                          {parsedMsgDate.toLocaleTimeString('pt-BR', {
+                            timeZone: 'America/Sao_Paulo',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
                         </span>
                       )}
                     </div>
@@ -1399,7 +1722,12 @@ export const AdminPanel: React.FC = () => {
               )}
             </div>
             <div className="p-3 bg-white border-t border-slate-100 flex justify-end">
-              <button onClick={() => setSelectedConvId(null)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-4 py-2 rounded-lg font-medium">Fechar</button>
+              <button
+                onClick={() => setSelectedConvId(null)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-4 py-2 rounded-lg font-medium transition-colors"
+              >
+                Fechar
+              </button>
             </div>
           </div>
         </div>
@@ -1407,33 +1735,33 @@ export const AdminPanel: React.FC = () => {
 
       {reservaModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-100">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
             <div className={`p-4 text-white ${reservaModal.acao === 'confirmar' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
               <h3 className="font-semibold text-base">
                 {reservaModal.acao === 'confirmar' ? '✅ Confirmar Reserva' : '❌ Marcar como Perdida'}
               </h3>
               <p className="font-mono text-xs text-white/80 truncate mt-0.5">{reservaModal.sessionId}</p>
             </div>
-            <div className="p-4 space-y-3">
+            <div className="p-5 space-y-4">
               {reservaModal.acao === 'confirmar' ? (
                 <>
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Valor final (R$)</label>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Valor final (R$)</label>
                     <input
                       type="number"
                       step="0.01"
                       value={reservaForm.valor}
                       onChange={e => setReservaForm(f => ({ ...f, valor: e.target.value }))}
-                      className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
                       placeholder="0,00"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Categoria</label>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Categoria</label>
                     <select
                       value={reservaForm.categoria}
                       onChange={e => setReservaForm(f => ({ ...f, categoria: e.target.value }))}
-                      className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
                     >
                       <option value="SUP">Apartamento Superior</option>
                       <option value="SEN">Suíte Sênior</option>
@@ -1441,11 +1769,11 @@ export const AdminPanel: React.FC = () => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Canal</label>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Canal</label>
                     <select
                       value={reservaForm.canal}
                       onChange={e => setReservaForm(f => ({ ...f, canal: e.target.value }))}
-                      className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
                     >
                       <option value="whatsapp">WhatsApp</option>
                       <option value="telefone">Telefone</option>
@@ -1455,11 +1783,11 @@ export const AdminPanel: React.FC = () => {
                 </>
               ) : (
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Motivo da perda</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1.5">Motivo da perda</label>
                   <select
                     value={reservaForm.motivo}
                     onChange={e => setReservaForm(f => ({ ...f, motivo: e.target.value }))}
-                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
                   >
                     <option value="preco">Preço alto</option>
                     <option value="data">Data indisponível</option>
@@ -1474,7 +1802,7 @@ export const AdminPanel: React.FC = () => {
                 <button
                   onClick={() => setReservaModal(null)}
                   disabled={salvandoStatus}
-                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded text-sm font-medium disabled:opacity-50"
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
                 >
                   Cancelar
                 </button>
@@ -1495,7 +1823,11 @@ export const AdminPanel: React.FC = () => {
                     }
                   }}
                   disabled={salvandoStatus}
-                  className={`flex-1 text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50 ${reservaModal.acao === 'confirmar' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}`}
+                  className={`flex-1 text-white px-4 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors ${
+                    reservaModal.acao === 'confirmar'
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : 'bg-rose-600 hover:bg-rose-700'
+                  }`}
                 >
                   {salvandoStatus ? 'Salvando...' : 'Confirmar'}
                 </button>
@@ -1510,12 +1842,170 @@ export const AdminPanel: React.FC = () => {
 
 // ========= SUBCOMPONENTES =========
 
+// 🔥 Revenue Alerts — Motor de flutuação de tarifa
+const RevenueAlerts: React.FC<{
+  alertas: AlertaFlutuacao[];
+  limit: number;
+  title: string;
+  onVerTodas?: () => void;
+}> = ({ alertas, limit, title, onVerTodas }) => {
+  if (alertas.length === 0) return null;
+
+  const visiveis = alertas.slice(0, limit);
+  const restantes = alertas.length - visiveis.length;
+
+  const config = {
+    subir: {
+      icon: '🔴',
+      label: 'Subir tarifa',
+      badge: 'bg-rose-100 text-rose-700 border-rose-200',
+      accent: 'border-l-rose-500',
+    },
+    promover: {
+      icon: '🔵',
+      label: 'Promover / Flash Sale',
+      badge: 'bg-blue-100 text-blue-700 border-blue-200',
+      accent: 'border-l-blue-500',
+    },
+    manter: {
+      icon: '⚪',
+      label: 'Manter tarifa',
+      badge: 'bg-slate-100 text-slate-600 border-slate-200',
+      accent: 'border-l-slate-300',
+    },
+    observar: {
+      icon: '·',
+      label: 'Observar',
+      badge: 'bg-slate-100 text-slate-500 border-slate-200',
+      accent: 'border-l-slate-200',
+    },
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+        {onVerTodas && restantes > 0 && (
+          <button
+            onClick={onVerTodas}
+            className="text-xs text-slate-500 hover:text-slate-900 font-medium underline"
+          >
+            Ver todas ({alertas.length})
+          </button>
+        )}
+      </div>
+      <div className="space-y-2">
+        {visiveis.map((a, i) => {
+          const c = config[a.tipo];
+          return (
+            <div
+              key={i}
+              className={`bg-white border border-slate-200 border-l-4 ${c.accent} rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3`}
+            >
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <span className="text-lg flex-shrink-0">{c.icon}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-sm font-semibold text-slate-900">
+                      {a.dataBR}
+                    </span>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${c.badge}`}>
+                      {c.label}
+                    </span>
+                    {a.deltaPct !== 0 && (
+                      <span
+                        className={`text-xs font-bold ${
+                          a.deltaPct > 0 ? 'text-rose-600' : 'text-blue-600'
+                        }`}
+                      >
+                        {a.deltaPct > 0 ? '+' : ''}{a.deltaPct}%
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">{a.sugestao}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-slate-500 flex-shrink-0">
+                <div className="text-center">
+                  <div className="font-bold text-slate-800">{a.buscas}</div>
+                  <div className="text-[10px]">buscas</div>
+                </div>
+                <div className="text-center">
+                  <div className="font-bold text-slate-800">{a.ocupacaoPct}%</div>
+                  <div className="text-[10px]">ocup.</div>
+                </div>
+                <div className="text-center">
+                  <div className="font-bold text-slate-800">{a.livres}</div>
+                  <div className="text-[10px]">livres</div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {restantes > 0 && (
+          <div className="text-xs text-slate-400 text-center py-2">
+            + {restantes} alerta{restantes === 1 ? '' : 's'} adicional{restantes === 1 ? '' : 'is'}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// 🔥 Executive KPI card
+const ExecCard: React.FC<{
+  label: string;
+  value: string | number;
+  sub?: string;
+  accent: 'emerald' | 'rose' | 'indigo' | 'amber';
+  icon?: string;
+}> = ({ label, value, sub, accent, icon }) => {
+  const accents = {
+    emerald: 'border-l-emerald-500 text-emerald-700',
+    rose: 'border-l-rose-500 text-rose-700',
+    indigo: 'border-l-indigo-500 text-indigo-700',
+    amber: 'border-l-amber-500 text-amber-700',
+  };
+  return (
+    <div className={`bg-white border border-slate-200 border-l-4 ${accents[accent]} rounded-xl p-4`}>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs text-slate-500 font-medium">{label}</span>
+        {icon && <span className="text-sm opacity-60">{icon}</span>}
+      </div>
+      <div className={`text-2xl font-bold ${accents[accent].split(' ')[1]}`}>{value}</div>
+      {sub && <div className="text-[10px] text-slate-400 mt-1">{sub}</div>}
+    </div>
+  );
+};
+
+// Mini stat para o heatmap header
+const MiniStat: React.FC<{
+  label: string;
+  value: string | number;
+  sub?: string;
+  accent: 'indigo' | 'emerald' | 'amber' | 'rose';
+}> = ({ label, value, sub, accent }) => {
+  const colors = {
+    indigo: 'bg-indigo-50 text-indigo-700',
+    emerald: 'bg-emerald-50 text-emerald-700',
+    amber: 'bg-amber-50 text-amber-700',
+    rose: 'bg-rose-50 text-rose-700',
+  };
+  return (
+    <div className={`${colors[accent]} rounded-xl p-3 text-center`}>
+      <div className="text-xl font-bold truncate">{value}</div>
+      <div className="text-[11px] opacity-75">{label}</div>
+      {sub && <div className="text-[10px] opacity-60 mt-0.5 font-mono">{sub}</div>}
+    </div>
+  );
+};
+
 const KanbanView: React.FC<{
   sessoes: SessaoAgrupada[];
-  ticketMedio: number;
+  adr: number;
   onMarcarConfirmada: (sid: string, valor: number) => void;
   onMarcarPerdida: (sid: string, valor: number) => void;
-}> = ({ sessoes, ticketMedio, onMarcarConfirmada, onMarcarPerdida }) => {
+}> = ({ sessoes, adr, onMarcarConfirmada, onMarcarPerdida }) => {
   const etapas = [
     { key: 'consulta_iniciada', label: 'Buscou', icon: '🔍' },
     { key: 'consulta_sucesso', label: 'Viu quartos', icon: '✅' },
@@ -1524,55 +2014,79 @@ const KanbanView: React.FC<{
     { key: 'whatsapp_enviado', label: 'WhatsApp', icon: '💬' },
   ];
 
-  const porEtapa = (idx: number) => sessoes.filter(s => {
-    if (s.statusFinal !== 'pendente') return false;
-    const etapasDaSessao = s.eventos.map(e => e.event);
-    const ultimaEtapa = etapas.map(e => e.key).filter(k => etapasDaSessao.includes(k)).pop();
-    return ultimaEtapa === etapas[idx].key;
-  });
+  const porEtapa = (idx: number) =>
+    sessoes.filter(s => {
+      if (s.statusFinal !== 'pendente') return false;
+      const etapasDaSessao = s.eventos.map(e => e.event);
+      const ultimaEtapa = etapas.map(e => e.key).filter(k => etapasDaSessao.includes(k)).pop();
+      return ultimaEtapa === etapas[idx].key;
+    });
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6">
+    <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
       {etapas.map((etapa, idx) => {
-        const cards = porEtapa(idx).sort((a, b) => calcularLeadScore(b, ticketMedio) - calcularLeadScore(a, ticketMedio));
+        const cards = porEtapa(idx).sort(
+          (a, b) => calcularLeadScore(b, adr) - calcularLeadScore(a, adr)
+        );
         return (
-          <div key={etapa.key} className="bg-slate-50 rounded-lg p-2 border border-slate-200 min-h-[200px]">
-            <div className="flex items-center justify-between mb-2 px-1">
-              <span className="text-xs font-semibold text-slate-700">{etapa.icon} {etapa.label}</span>
-              <span className="text-xs font-bold text-slate-500 bg-white px-2 py-0.5 rounded-full">{cards.length}</span>
+          <div key={etapa.key} className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 min-h-[200px]">
+            <div className="flex items-center justify-between mb-2.5 px-1">
+              <span className="text-xs font-semibold text-slate-700">
+                {etapa.icon} {etapa.label}
+              </span>
+              <span className="text-xs font-bold text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
+                {cards.length}
+              </span>
             </div>
             <div className="space-y-2">
               {cards.slice(0, 8).map(s => {
-                const score = calcularLeadScore(s, ticketMedio);
+                const score = calcularLeadScore(s, adr);
                 const consulta = s.eventos.find(e => e.event === 'consulta_iniciada');
                 return (
-                  <div key={s.sessionId} className="bg-white rounded p-2 shadow-sm border border-slate-100 text-xs">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono text-[10px] text-slate-500">{s.sessionId.substring(0, 10)}...</span>
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${score >= 70 ? 'bg-red-100 text-red-700' : score >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                  <div key={s.sessionId} className="bg-white rounded-lg p-2.5 border border-slate-200 text-xs">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="font-mono text-[10px] text-slate-500">
+                        {s.sessionId.substring(0, 10)}...
+                      </span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          score >= 70
+                            ? 'bg-rose-100 text-rose-700'
+                            : score >= 50
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
                         {score}
                       </span>
                     </div>
                     {consulta?.data?.checkin && (
                       <div className="text-[10px] text-slate-500 mb-1">
-                        {consulta.data.checkin} · {consulta.data.adultos}a{consulta.data.criancas ? `+${consulta.data.criancas}c` : ''}
+                        {consulta.data.checkin} · {consulta.data.adultos}a
+                        {consulta.data.criancas ? `+${consulta.data.criancas}c` : ''}
                       </div>
                     )}
                     {s.valorCotado > 0 && (
-                      <div className="text-[11px] font-semibold text-emerald-700 mb-1">{formatCurrency(s.valorCotado)}</div>
+                      <div className="text-[11px] font-semibold text-emerald-700 mb-1">
+                        {formatCurrency(s.valorCotado)}
+                      </div>
                     )}
                     {etapa.key === 'whatsapp_enviado' && (
-                      <div className="flex gap-1 mt-1">
+                      <div className="flex gap-1 mt-1.5">
                         <button
                           onClick={() => onMarcarConfirmada(s.sessionId, s.valorCotado)}
-                          className="flex-1 bg-emerald-600 text-white px-1 py-0.5 rounded text-[10px] hover:bg-emerald-700"
+                          className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-1 py-1 rounded-md text-[10px] font-medium transition-colors"
                           title="Confirmar reserva"
-                        >✅</button>
+                        >
+                          ✅
+                        </button>
                         <button
                           onClick={() => onMarcarPerdida(s.sessionId, s.valorCotado)}
-                          className="flex-1 bg-rose-600 text-white px-1 py-0.5 rounded text-[10px] hover:bg-rose-700"
+                          className="flex-1 bg-rose-600 hover:bg-rose-700 text-white px-1 py-1 rounded-md text-[10px] font-medium transition-colors"
                           title="Não fechou"
-                        >❌</button>
+                        >
+                          ❌
+                        </button>
                       </div>
                     )}
                   </div>
@@ -1612,18 +2126,18 @@ const OcupacaoTable: React.FC<{
         <h3 className="text-sm font-semibold text-slate-700">📅 Próximos 60 dias — Demanda vs Ocupação</h3>
         <div className="text-xs text-slate-500">Total: 18 unidades (6 SUP · 6 SEN · 6 MAS)</div>
       </div>
-      <div className="overflow-x-auto max-h-[420px]">
+      <div className="overflow-x-auto max-h-[480px] rounded-lg border border-slate-200">
         <table className="w-full text-xs border-collapse">
-          <thead className="sticky top-0 bg-slate-100 text-slate-700">
+          <thead className="sticky top-0 bg-slate-100 text-slate-600 z-10">
             <tr>
-              <th className="px-2 py-2 text-left">Data</th>
-              <th className="px-2 py-2 text-center">Buscas</th>
-              <th className="px-2 py-2 text-center">SUP</th>
-              <th className="px-2 py-2 text-center">SEN</th>
-              <th className="px-2 py-2 text-center">MAS</th>
-              <th className="px-2 py-2 text-center">Ocupação</th>
-              <th className="px-2 py-2 text-left">Barra</th>
-              <th className="px-2 py-2 text-left">Sinal</th>
+              <th className="px-2 py-2 text-left font-medium">Data</th>
+              <th className="px-2 py-2 text-center font-medium">Buscas</th>
+              <th className="px-2 py-2 text-center font-medium">SUP</th>
+              <th className="px-2 py-2 text-center font-medium">SEN</th>
+              <th className="px-2 py-2 text-center font-medium">MAS</th>
+              <th className="px-2 py-2 text-center font-medium">Ocup.</th>
+              <th className="px-2 py-2 text-left font-medium w-28">Barra</th>
+              <th className="px-2 py-2 text-left font-medium">Sinal</th>
             </tr>
           </thead>
           <tbody>
@@ -1632,32 +2146,42 @@ const OcupacaoTable: React.FC<{
               const isoDate = `${yyyy}-${mm}-${dd}`;
               const buscas = buscasPorData[isoDate] || 0;
               const pct = Math.round(d.ocupacao * 100);
-              const corBarra = pct >= 80 ? 'bg-red-600' : pct >= 60 ? 'bg-orange-500' : pct >= 40 ? 'bg-amber-400' : 'bg-emerald-500';
+              const corBarra =
+                pct >= 80 ? 'bg-rose-500'
+                : pct >= 60 ? 'bg-orange-500'
+                : pct >= 40 ? 'bg-amber-400'
+                : 'bg-emerald-500';
 
               let sinal = '';
               let sinalCor = '';
-              if (buscas >= 3 && pct < 40) { sinal = '🔴 Subir preço'; sinalCor = 'text-red-700'; }
+              if (buscas >= 3 && pct < 40) { sinal = '🔴 Subir preço'; sinalCor = 'text-rose-700 font-semibold'; }
               else if (buscas >= 3 && pct >= 60) { sinal = '🟡 Já no caminho'; sinalCor = 'text-amber-700'; }
               else if (buscas <= 1 && pct < 30) { sinal = '🔵 Promover'; sinalCor = 'text-blue-700'; }
               else if (buscas <= 1 && pct >= 70) { sinal = '⚪ Manter'; sinalCor = 'text-slate-500'; }
-              else { sinal = '·'; sinalCor = 'text-slate-400'; }
+              else { sinal = '·'; sinalCor = 'text-slate-300'; }
 
               const isHoje = isoDate === hojeStr;
 
               return (
-                <tr key={i} className={`border-b border-slate-100 ${isHoje ? 'bg-indigo-50' : ''}`}>
-                  <td className="px-2 py-1.5 font-mono">{d.data}</td>
-                  <td className="px-2 py-1.5 text-center font-semibold">{buscas || '·'}</td>
+                <tr
+                  key={i}
+                  className={`border-b border-slate-100 last:border-0 ${isHoje ? 'bg-indigo-50/50' : 'hover:bg-slate-50/50'}`}
+                >
+                  <td className="px-2 py-1.5 font-mono text-slate-700">
+                    {d.data}
+                    {isHoje && <span className="ml-1.5 text-[9px] font-bold text-indigo-600">HOJE</span>}
+                  </td>
+                  <td className="px-2 py-1.5 text-center font-semibold text-slate-800">{buscas || '·'}</td>
                   <td className="px-2 py-1.5 text-center text-slate-500">{d.porCategoria.SUP}</td>
                   <td className="px-2 py-1.5 text-center text-slate-500">{d.porCategoria.SEN}</td>
                   <td className="px-2 py-1.5 text-center text-slate-500">{d.porCategoria.MAS}</td>
-                  <td className="px-2 py-1.5 text-center font-bold">{pct}%</td>
-                  <td className="px-2 py-1.5 w-32">
-                    <div className="w-full bg-slate-200 rounded-full h-2">
-                      <div className={`h-2 rounded-full ${corBarra}`} style={{ width: `${pct}%` }} />
+                  <td className="px-2 py-1.5 text-center font-bold text-slate-800">{pct}%</td>
+                  <td className="px-2 py-1.5">
+                    <div className="w-full bg-slate-100 rounded-full h-2">
+                      <div className={`h-2 rounded-full ${corBarra} transition-all`} style={{ width: `${pct}%` }} />
                     </div>
                   </td>
-                  <td className={`px-2 py-1.5 text-xs font-medium ${sinalCor}`}>{sinal}</td>
+                  <td className={`px-2 py-1.5 text-xs ${sinalCor}`}>{sinal}</td>
                 </tr>
               );
             })}
@@ -1671,24 +2195,28 @@ const OcupacaoTable: React.FC<{
   );
 };
 
-// ========= COMPONENTES AUXILIARES =========
-const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({ label, value, suffix = '' }) => (
-  <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#1e293b]">
-    <div className="text-2xl font-bold text-[#1e293b]">{value}{suffix}</div>
-    <div className="text-sm text-gray-600">{label}</div>
+const StatCard: React.FC<{ label: string; value: number | string; suffix?: string }> = ({
+  label, value, suffix = '',
+}) => (
+  <div className="bg-white border border-slate-200 rounded-xl p-4">
+    <div className="text-2xl font-bold text-slate-900">
+      {value}
+      {suffix && <span className="text-sm font-normal text-slate-500 ml-1">{suffix}</span>}
+    </div>
+    <div className="text-xs text-slate-500 mt-0.5">{label}</div>
   </div>
 );
 
 const TrackingCard: React.FC<{ label: string; value: number; color?: string }> = ({ label, value, color }) => {
   const borderColor =
-    color === 'gold' ? 'border-t-yellow-500'
-    : color === 'red' ? 'border-t-red-500'
+    color === 'gold' ? 'border-t-amber-400'
+    : color === 'red' ? 'border-t-rose-400'
     : color === 'green' ? 'border-t-emerald-500'
-    : 'border-t-[#1e293b]';
+    : 'border-t-slate-300';
   return (
-    <div className={`bg-white p-3 rounded-lg shadow text-center border-t-4 ${borderColor}`}>
-      <div className="text-2xl font-bold text-[#1e293b]">{value}</div>
-      <div className="text-xs text-gray-600">{label}</div>
+    <div className={`bg-white p-2.5 rounded-lg border border-slate-200 border-t-4 ${borderColor} text-center`}>
+      <div className="text-xl font-bold text-slate-900">{value}</div>
+      <div className="text-[10px] text-slate-500 uppercase tracking-wide">{label}</div>
     </div>
   );
 };
