@@ -1,18 +1,18 @@
 import { RateResponse, Room } from '../../types';
 import { convertCurrencyToNumber } from '../../utils/currencyUtils';
 
-const RATES_API_URL = import.meta.env.VITE_RATES_API_URL;
+const AI_API_URL = import.meta.env.VITE_AI_API_URL;
 
 export async function fetchHotelRates(startDate: string, endDate: string): Promise<RateResponse> {
-  const url = `${RATES_API_URL}?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
+  const url = `${AI_API_URL.replace(/\/$/, '')}/tarifas`;
 
   try {
     const response = await fetch(url, {
-      method: 'GET',
+      method: 'POST',
       headers: {
-        'Authorization': 'Basic Og==',
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ start: startDate, end: endDate }),
     });
 
     if (!response.ok) {
