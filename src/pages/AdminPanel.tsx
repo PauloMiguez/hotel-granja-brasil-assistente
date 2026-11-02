@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 const WORKER_URL = 'https://intrega-ia.paulo-migueoli.workers.dev';
 
@@ -367,6 +369,26 @@ const gerarAlertasFlutuacao = (
 
 // ========= COMPONENTE PRINCIPAL =========
 export const AdminPanel: React.FC = () => {
+  const { token, logout } = useAuth();
+  const navigate = useNavigate();
+
+  // 🔐 fetch autenticado: injeta Bearer token e trata 401
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+    if (res.status === 401) {
+      logout();
+      navigate('/login', { replace: true });
+      throw new Error('Sessão expirada. Faça login novamente.');
+    }
+    return res;
+  };
+
   const [filtered, setFiltered] = useState<Conversation[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
@@ -400,10 +422,10 @@ export const AdminPanel: React.FC = () => {
   const [loadingOcupacao, setLoadingOcupacao] = useState(false);
   const [ocupacaoRange, setOcupacaoRange] = useState<{ start: string; end: string } | null>(null);
 
-  // ========= FETCH CONVERSAS =========
+  // ========= FETCH CONVERSAS (protegido) =========
   const fetchConversations = async () => {
     try {
-      const res = await fetch(`${WORKER_URL}/conversas`);
+      const res = await authFetch(`${WORKER_URL}/conversas`);
       const data = await res.json();
       if (data.success) {
         const convs = parseConversations(data.data || []);
@@ -426,7 +448,7 @@ export const AdminPanel: React.FC = () => {
       return;
     }
     try {
-      const res = await fetch(`${WORKER_URL}/conversa?id=${encodeURIComponent(convId)}`);
+      const res = await authFetch(`${WORKER_URL}/conversa?id=${encodeURIComponent(convId)}`);
       const data = await res.json();
       if (data.success && data.data) {
         const fields = data.data.fields || {};
@@ -449,10 +471,10 @@ export const AdminPanel: React.FC = () => {
     finally { setLoadingConv(false); }
   };
 
-  // ========= FETCH TRACKING =========
+  // ========= FETCH TRACKING (protegido) =========
   const fetchTrackingStats = useCallback(async () => {
     try {
-      const res = await fetch(`${WORKER_URL}/tracking-stats`);
+      const res = await authFetch(`${WORKER_URL}/tracking-stats`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.events) {
@@ -471,6 +493,7 @@ export const AdminPanel: React.FC = () => {
         setTrackingEvents(dedupeEvents(localData.events));
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchOcupacao = useCallback(async (start: Date, end: Date) => {
@@ -579,6 +602,7 @@ export const AdminPanel: React.FC = () => {
       setLoading(false);
     };
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -789,6 +813,13 @@ export const AdminPanel: React.FC = () => {
               className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             >
               📥 CSV
+            </button>
+            <button
+              onClick={() => { logout(); navigate('/login', { replace: true }); }}
+              className="bg-red-500/20 hover:bg-red-500/30 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              title="Sair do painel"
+            >
+              🚪 Sair
             </button>
           </div>
         </header>
