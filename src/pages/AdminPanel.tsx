@@ -111,37 +111,95 @@ const dedupeEvents = (events: TrackingEvent[]): TrackingEvent[] => {
 const formatCurrency = (v: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 
-// ========= EXTRAÇÃO PROFUNDA DE CATEGORIAS =========
+// ========= EXTRAÇÃO DE ITENS DO CARRINHO =========
 const extractCategorias = (eventos: TrackingEvent[]): string[] => {
   const cats = new Set<string>();
-  
-  const checkString = (str: string) => {
-    const s = str.toUpperCase();
-    if (s.includes('SUPERIOR') || /\bSUP\b/.test(s)) cats.add('SUP');
-    if (s.includes('SENIOR') || s.includes('SÊNIOR') || /\bSEN\b/.test(s)) cats.add('SEN');
-    if (s.includes('MASTER') || /\bMAS\b/.test(s)) cats.add('MAS');
+  const normalize = (c: string) => {
+    const u = c.toUpperCase();
+    if (u.includes('SUPERIOR') || u === 'SUP') return 'SUP';
+    if (u.includes('SENIOR') || u.includes('SÊNIOR') || u === 'SEN') return 'SEN';
+    if (u.includes('MASTER') || u === 'MAS') return 'MAS';
+    return u;
   };
-
-  const traverse = (val: any) => {
-    if (!val) return;
-    if (typeof val === 'string') {
-      checkString(val);
-    } else if (Array.isArray(val)) {
-      val.forEach(traverse);
-    } else if (typeof val === 'object') {
-      Object.values(val).forEach(traverse);
+  const add = (val: any) => {
+    if (typeof val === 'string' && val.trim() !== '') {
+      cats.add(normalize(val.trim()));
     }
   };
-
+  
   eventos.forEach(ev => {
-    if (['carrinho_adicionado', 'orcamento_visualizado', 'whatsapp_enviado', 'consulta_sucesso'].includes(ev.event)) {
-      traverse(ev.data);
+    if (['carrinho_adicionado', 'orcamento_visualizado', 'whatsapp_enviado'].includes(ev.event)) {
+      const d = ev.data || {};
+      add(d.categoria);
+      add(d.tipo);
+      add(d.acomodacao);
+      add(d.room_type);
+      if (Array.isArray(d.categorias)) d.categorias.forEach(add);
+      if (Array.isArray(d.itens)) {
+        d.itens.forEach((item: any) => {
+          add(item.categoria);
+          add(item.tipo);
+          add(item.acomodacao);
+          add(item.room_type);
+        });
+      }
     }
   });
+  return Array.from(cats);
+};
 
-  // Ordena para manter SUP, SEN, MAS nesta ordem de prioridade
-  const order: Record<string, number> = { 'SUP': 1, 'SEN': 2, 'MAS': 3 };
-  return Array.from(cats).sort((a, b) => (order[a] || 9) - (order[b] || 9));
+const extractItensCarrinho = (eventos: TrackingEvent[]): Array<{ categoria: string, valor: number }> => {
+  const itens: Array<{ categoria: string, valor: number }> = [];
+  
+  const normalize = (c: string) => {
+    const u = c.toUpperCase();
+    if (u.includes('SUPERIOR') || /\bSUP\b/.test(u)) return 'SUP';
+    if (u.includes('SENIOR') || u.includes('SÊNIOR') || /\bSEN\b/.test(u)) return 'SEN';
+    if (u.includes('MASTER') || /\bMAS\b/.test(u)) return 'MAS';
+    return 'SEN';
+  };
+
+  const evs = eventos.filter(e => ['carrinho_adicionado', 'orcamento_visualizado', 'whatsapp_enviado'].includes(e.event));
+  const lastEv = evs[evs.length - 1];
+  
+  if (lastEv && lastEv.data) {
+    const d = lastEv.data;
+    const qtd = Number(d.quantidade || d.qtd || 1);
+    
+    // Tenta extrair de arrays no payload
+    const arrays = [d.itens, d.categorias, d.quartos, d.acomodacoes].filter(Array.isArray);
+    
+    if (arrays.length > 0) {
+      arrays.forEach(arr => {
+        arr.forEach((item: any) => {
+          const catStr = typeof item === 'string' ? item : (item.categoria || item.tipo || item.acomodacao || item.room_type || '');
+          const cat = normalize(catStr);
+          const itemQtd = Number(item.quantidade || item.qtd || 1);
+          for (let i=0; i<itemQtd; i++) {
+            itens.push({ categoria: cat, valor: 0 });
+          }
+        });
+      });
+    } else {
+      // Fallback baseado no extractCategorias
+      const catsUnicas = extractCategorias(eventos);
+      if (catsUnicas.length > 0) {
+        catsUnicas.forEach(cat => itens.push({ categoria: cat, valor: 0 }));
+        // Se a quantidade total exceder, adiciona mais itens
+        for (let i = catsUnicas.length; i < qtd; i++) {
+          itens.push({ categoria: catsUnicas[0], valor: 0 });
+        }
+      } else if (qtd > 0) {
+        for (let i=0; i<qtd; i++) {
+          itens.push({ categoria: 'SEN', valor: 0 });
+        }
+      }
+    }
+  }
+  
+  if (itens.length === 0) itens.push({ categoria: 'SEN', valor: 0 });
+  
+  return itens;
 };
 
 const EVENTOS_IGNORADOS = ['teste_final', 'diagnostico', 'teste'];
@@ -217,7 +275,7 @@ const calcularLeadScore = (s: SessaoAgrupada, adr: number): number => {
   );
 };
 
-// ========= ABANDONO POR FAIXA DE VALOR (universo = carrinho) =========
+// ========= ABANDONO POR FAIXA DE VALOR =========
 const analisarAbandonoPorValor = (sessoes: SessaoAgrupada[]) => {
   const bins = [
     { min: 1, max: 500, label: 'R$ 1–500' },
@@ -405,7 +463,6 @@ export const AdminPanel: React.FC = () => {
   const { token, logout } = useAuth();
   const navigate = useNavigate();
 
-  // 🔐 fetch autenticado: injeta Bearer token e trata 401
   const authFetch = async (url: string, options: RequestInit = {}) => {
     const res = await fetch(url, {
       ...options,
@@ -444,18 +501,26 @@ export const AdminPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'demanda' | 'jornadas' | 'conversas'>('dashboard');
 
   const [reservaModal, setReservaModal] = useState<{
-    sessionId: string; acao: 'confirmar' | 'perder'; valor: number; categoriasDetectadas: string[];
+    sessionId: string; acao: 'confirmar' | 'perder'; valor: number;
   } | null>(null);
-  const [reservaForm, setReservaForm] = useState({
-    valor: '', categoria: 'SEN', canal: 'whatsapp', motivo: 'preco',
+  
+  // Formulário atualizado para suportar múltiplos itens
+  const [reservaForm, setReservaForm] = useState<{
+    itens: Array<{ categoria: string; valor: string }>;
+    canal: string; 
+    motivo: string;
+  }>({
+    itens: [{ categoria: 'SEN', valor: '' }],
+    canal: 'whatsapp', 
+    motivo: 'preco',
   });
+  
   const [salvandoStatus, setSalvandoStatus] = useState(false);
 
   const [ocupacao, setOcupacao] = useState<OcupacaoDiaria[]>([]);
   const [loadingOcupacao, setLoadingOcupacao] = useState(false);
   const [ocupacaoRange, setOcupacaoRange] = useState<{ start: string; end: string } | null>(null);
 
-  // ========= FETCH CONVERSAS (protegido) =========
   const fetchConversations = async () => {
     try {
       const res = await authFetch(`${WORKER_URL}/conversas`);
@@ -504,7 +569,6 @@ export const AdminPanel: React.FC = () => {
     finally { setLoadingConv(false); }
   };
 
-  // ========= FETCH TRACKING (protegido) =========
   const fetchTrackingStats = useCallback(async () => {
     try {
       const res = await authFetch(`${WORKER_URL}/tracking-stats`);
@@ -526,7 +590,6 @@ export const AdminPanel: React.FC = () => {
         setTrackingEvents(dedupeEvents(localData.events));
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchOcupacao = useCallback(async (start: Date, end: Date) => {
@@ -596,7 +659,14 @@ export const AdminPanel: React.FC = () => {
   const marcarReserva = async (
     sessionId: string,
     tipo: 'confirmada' | 'perdida',
-    dados: { valor?: number; categoria?: string; canal?: string; motivo?: string; valorCotado?: number }
+    dados: { 
+      valor?: number; 
+      categoria?: string; 
+      canal?: string; 
+      motivo?: string; 
+      valorCotado?: number;
+      itens?: Array<{ categoria: string, valor: number }>;
+    }
   ) => {
     setSalvandoStatus(true);
     try {
@@ -608,7 +678,13 @@ export const AdminPanel: React.FC = () => {
         data: {
           referencia_sessao: sessionId,
           ...(tipo === 'confirmada'
-            ? { valor_final: dados.valor, categoria: dados.categoria, canal: dados.canal, valor_cotado: dados.valorCotado }
+            ? { 
+                valor_final: dados.valor, 
+                categoria: dados.categoria, 
+                canal: dados.canal, 
+                valor_cotado: dados.valorCotado,
+                itens: dados.itens // Salva os detalhes no backend
+              }
             : { motivo: dados.motivo, valor_cotado: dados.valorCotado }),
         },
       };
@@ -635,7 +711,6 @@ export const AdminPanel: React.FC = () => {
       setLoading(false);
     };
     loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -694,11 +769,9 @@ export const AdminPanel: React.FC = () => {
     URL.revokeObjectURL(link.href);
   };
 
-  // ========= MÉTRICAS DERIVADAS =========
   const sessoes = useMemo(() => agruparSessoes(trackingEvents), [trackingEvents]);
   const trackingStats = useMemo(() => calcularStatsDerivados(sessoes), [sessoes]);
 
-  // 🔥 ADR (Average Daily Rate) — receita por noite reservada
   const adr = useMemo(() => {
     const confirmadas = sessoes.filter(s => s.statusFinal === 'confirmada');
     if (!confirmadas.length) return 0;
@@ -721,7 +794,6 @@ export const AdminPanel: React.FC = () => {
       : 0;
   }, [sessoes]);
 
-  // ADR Proxy: quando não há noites, usa média simples das reservas
   const adrProxy = useMemo(() => {
     const confirmadas = sessoes.filter(s => s.statusFinal === 'confirmada');
     if (!confirmadas.length) return 0;
@@ -798,7 +870,6 @@ export const AdminPanel: React.FC = () => {
 
   const alertasAltaPrioridade = alertasFlutuacao.filter(a => a.prioridade >= 2).length;
 
-  // ========= TAB DEFINITION =========
   const tabs: Array<{
     key: typeof activeTab;
     label: string;
@@ -907,7 +978,6 @@ export const AdminPanel: React.FC = () => {
         {/* ============= TAB 1: DASHBOARD EXECUTIVO ============= */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            {/* KPIs de conversas */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <StatCard label="Conversas" value={stats.total} />
               <StatCard label="Mensagens" value={stats.msgs.toLocaleString()} />
@@ -915,7 +985,6 @@ export const AdminPanel: React.FC = () => {
               <StatCard label="Média" value={stats.avg.toFixed(1)} suffix=" msg/conv" />
             </div>
 
-            {/* Revenue Alerts compacto */}
             {alertasFlutuacao.filter(a => a.prioridade >= 2).length > 0 && (
               <RevenueAlerts
                 alertas={alertasFlutuacao}
@@ -925,7 +994,6 @@ export const AdminPanel: React.FC = () => {
               />
             )}
 
-            {/* KPIs comerciais */}
             <div>
               <h2 className="text-lg font-semibold text-slate-900 mb-3">💰 Resultado Comercial</h2>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -969,7 +1037,6 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
-            {/* Funil */}
             <div>
               <h2 className="text-lg font-semibold text-slate-900 mb-3">📈 Funil de Conversão</h2>
               <div className="bg-white border border-slate-200 rounded-xl p-5">
@@ -1005,12 +1072,10 @@ export const AdminPanel: React.FC = () => {
         {/* ============= TAB 2: DEMANDA & TARIFA ============= */}
         {activeTab === 'demanda' && (
           <div className="space-y-6">
-            {/* Alerta de tarifa completo */}
             {alertasFlutuacao.length > 0 && (
               <RevenueAlerts alertas={alertasFlutuacao} limit={12} title="⚡ Sugestões de Flutuação de Tarifa" />
             )}
 
-            {/* Demanda x Ocupação */}
             <div>
               <h2 className="text-lg font-semibold text-slate-900 mb-3">📅 Demanda × Ocupação × Preço</h2>
               <div className="bg-white border border-slate-200 rounded-xl p-5">
@@ -1029,7 +1094,6 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
-            {/* Análise por Antecedência */}
             {leadTimeData.length > 0 && (
               <div>
                 <h2 className="text-lg font-semibold text-slate-900 mb-3">⏱️ Análise por Antecedência</h2>
@@ -1065,7 +1129,6 @@ export const AdminPanel: React.FC = () => {
               </div>
             )}
 
-            {/* Abandono do Carrinho */}
             {abandonoPorValor.length > 0 && (
               <div>
                 <h2 className="text-lg font-semibold text-slate-900 mb-3">
@@ -1108,7 +1171,6 @@ export const AdminPanel: React.FC = () => {
               </div>
             )}
 
-            {/* Mapa de Calor */}
             <div>
               <h2 className="text-lg font-semibold text-slate-900 mb-3">🗺️ Mapa de Calor de Buscas</h2>
               {(() => {
@@ -1297,7 +1359,6 @@ export const AdminPanel: React.FC = () => {
         {/* ============= TAB 3: JORNADAS & PIPELINE ============= */}
         {activeTab === 'jornadas' && (
           <div className="space-y-6">
-            {/* Fila de Recuperação */}
             <div id="fila-recuperacao">
               <h2 className="text-lg font-semibold text-slate-900 mb-3">
                 🔔 Fila de Recuperação
@@ -1347,10 +1408,15 @@ export const AdminPanel: React.FC = () => {
                               <button
                                 onClick={() => {
                                   const sessao = sessoes.find(s => s.sessionId === item.sessionId);
-                                  const cats = sessao ? extractCategorias(sessao.eventos) : [];
-                                  const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
-                                  setReservaModal({ sessionId: item.sessionId, acao: 'confirmar', valor: item.valor, categoriasDetectadas: cats });
-                                  setReservaForm({ valor: String(item.valor || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
+                                  if (!sessao) return;
+                                  const itens = extractItensCarrinho(sessao.eventos);
+                                  const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toFixed(2) : '';
+                                  setReservaModal({ sessionId: item.sessionId, acao: 'confirmar', valor: item.valor });
+                                  setReservaForm({ 
+                                    itens: itens.map(i => ({ categoria: i.categoria, valor: defaultValor })), 
+                                    canal: 'whatsapp', 
+                                    motivo: 'preco' 
+                                  });
                                 }}
                                 className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-md mr-1 transition-colors"
                                 title="Confirmar reserva"
@@ -1360,10 +1426,14 @@ export const AdminPanel: React.FC = () => {
                               <button
                                 onClick={() => {
                                   const sessao = sessoes.find(s => s.sessionId === item.sessionId);
-                                  const cats = sessao ? extractCategorias(sessao.eventos) : [];
-                                  const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
-                                  setReservaModal({ sessionId: item.sessionId, acao: 'perder', valor: item.valor, categoriasDetectadas: cats });
-                                  setReservaForm({ valor: String(item.valor || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
+                                  if (!sessao) return;
+                                  const itens = extractItensCarrinho(sessao.eventos);
+                                  setReservaModal({ sessionId: item.sessionId, acao: 'perder', valor: item.valor });
+                                  setReservaForm({ 
+                                    itens: itens.map(i => ({ categoria: i.categoria, valor: '' })), 
+                                    canal: 'whatsapp', 
+                                    motivo: 'preco' 
+                                  });
                                 }}
                                 className="text-xs bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-md transition-colors"
                                 title="Não fechou"
@@ -1380,7 +1450,6 @@ export const AdminPanel: React.FC = () => {
               )}
             </div>
 
-            {/* Jornadas */}
             <div>
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
                 <h2 className="text-lg font-semibold text-slate-900">🧑‍💻 Jornadas dos Clientes</h2>
@@ -1426,16 +1495,23 @@ export const AdminPanel: React.FC = () => {
                   sessoes={sessoes}
                   adr={adrProxy}
                   onMarcarConfirmada={(sessao) => {
-                    const cats = extractCategorias(sessao.eventos);
-                    const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
-                    setReservaModal({ sessionId: sessao.sessionId, acao: 'confirmar', valor: sessao.valorCotado, categoriasDetectadas: cats });
-                    setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
+                    const itens = extractItensCarrinho(sessao.eventos);
+                    const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toFixed(2) : '';
+                    setReservaModal({ sessionId: sessao.sessionId, acao: 'confirmar', valor: sessao.valorCotado });
+                    setReservaForm({ 
+                      itens: itens.map(i => ({ categoria: i.categoria, valor: defaultValor })), 
+                      canal: 'whatsapp', 
+                      motivo: 'preco' 
+                    });
                   }}
                   onMarcarPerdida={(sessao) => {
-                    const cats = extractCategorias(sessao.eventos);
-                    const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
-                    setReservaModal({ sessionId: sessao.sessionId, acao: 'perder', valor: sessao.valorCotado, categoriasDetectadas: cats });
-                    setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
+                    const itens = extractItensCarrinho(sessao.eventos);
+                    setReservaModal({ sessionId: sessao.sessionId, acao: 'perder', valor: sessao.valorCotado });
+                    setReservaForm({ 
+                      itens: itens.map(i => ({ categoria: i.categoria, valor: '' })), 
+                      canal: 'whatsapp', 
+                      motivo: 'preco' 
+                    });
                   }}
                 />
               ) : (
@@ -1619,10 +1695,14 @@ export const AdminPanel: React.FC = () => {
                                   <div className="flex gap-2 pt-2 border-t border-slate-100">
                                     <button
                                       onClick={() => {
-                                        const cats = extractCategorias(sessao.eventos);
-                                        const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
-                                        setReservaModal({ sessionId, acao: 'confirmar', valor: sessao.valorCotado, categoriasDetectadas: cats });
-                                        setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
+                                        const itens = extractItensCarrinho(sessao.eventos);
+                                        const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toFixed(2) : '';
+                                        setReservaModal({ sessionId, acao: 'confirmar', valor: sessao.valorCotado });
+                                        setReservaForm({ 
+                                          itens: itens.map(i => ({ categoria: i.categoria, valor: defaultValor })), 
+                                          canal: 'whatsapp', 
+                                          motivo: 'preco' 
+                                        });
                                       }}
                                       className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition-colors"
                                     >
@@ -1630,10 +1710,13 @@ export const AdminPanel: React.FC = () => {
                                     </button>
                                     <button
                                       onClick={() => {
-                                        const cats = extractCategorias(sessao.eventos);
-                                        const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
-                                        setReservaModal({ sessionId, acao: 'perder', valor: sessao.valorCotado, categoriasDetectadas: cats });
-                                        setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
+                                        const itens = extractItensCarrinho(sessao.eventos);
+                                        setReservaModal({ sessionId, acao: 'perder', valor: sessao.valorCotado });
+                                        setReservaForm({ 
+                                          itens: itens.map(i => ({ categoria: i.categoria, valor: '' })), 
+                                          canal: 'whatsapp', 
+                                          motivo: 'preco' 
+                                        });
                                       }}
                                       className="flex-1 bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition-colors"
                                     >
@@ -1646,17 +1729,15 @@ export const AdminPanel: React.FC = () => {
                                   <div className="pt-2 border-t border-slate-100 flex gap-2">
                                     <button
                                       onClick={() => {
-                                        const cats = extractCategorias(sessao.eventos);
-                                        const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
+                                        const itens = extractItensCarrinho(sessao.eventos);
+                                        const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toFixed(2) : '';
                                         setReservaModal({
                                           sessionId,
                                           acao: statusFinal === 'confirmada' ? 'perder' : 'confirmar',
                                           valor: sessao.valorCotado,
-                                          categoriasDetectadas: cats,
                                         });
                                         setReservaForm({
-                                          valor: String(sessao.valorCotado || ''),
-                                          categoria: defaultCat,
+                                          itens: itens.map(i => ({ categoria: i.categoria, valor: defaultValor })),
                                           canal: 'whatsapp',
                                           motivo: 'preco',
                                         });
@@ -1816,7 +1897,7 @@ export const AdminPanel: React.FC = () => {
 
       {reservaModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200">
             <div className={`p-4 text-white ${reservaModal.acao === 'confirmar' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
               <h3 className="font-semibold text-base">
                 {reservaModal.acao === 'confirmar' ? '✅ Confirmar Reserva' : '❌ Marcar como Perdida'}
@@ -1826,35 +1907,67 @@ export const AdminPanel: React.FC = () => {
             <div className="p-5 space-y-4">
               {reservaModal.acao === 'confirmar' ? (
                 <>
-                  {reservaModal.categoriasDetectadas && reservaModal.categoriasDetectadas.length > 1 && (
-                    <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-xs text-amber-800 mb-3">
-                      ⚠️ <strong>Múltiplas categorias detectadas no carrinho:</strong> {reservaModal.categoriasDetectadas.join(', ')}.
-                      Selecione a categoria principal para a reserva abaixo.
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Acomodações / Valores</label>
+                    <div className="space-y-2">
+                      {reservaForm.itens.map((item, idx) => (
+                        <div key={idx} className="flex gap-2 items-start">
+                          <select
+                            value={item.categoria}
+                            onChange={e => {
+                              const newItens = [...reservaForm.itens];
+                              newItens[idx].categoria = e.target.value;
+                              setReservaForm(f => ({ ...f, itens: newItens }));
+                            }}
+                            className="w-32 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+                          >
+                            <option value="SUP">Superior</option>
+                            <option value="SEN">Sênior</option>
+                            <option value="MAS">Master</option>
+                          </select>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={item.valor}
+                            onChange={e => {
+                              const newItens = [...reservaForm.itens];
+                              newItens[idx].valor = e.target.value;
+                              setReservaForm(f => ({ ...f, itens: newItens }));
+                            }}
+                            placeholder="Valor final (R$)"
+                            className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+                          />
+                          <button
+                            onClick={() => {
+                              const newItens = reservaForm.itens.filter((_, i) => i !== idx);
+                              setReservaForm(f => ({ ...f, itens: newItens }));
+                            }}
+                            disabled={reservaForm.itens.length === 1}
+                            className="text-rose-500 hover:text-rose-700 p-2 disabled:opacity-30 disabled:hover:text-rose-500 font-bold text-lg leading-none"
+                            title="Remover item"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  )}
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Valor final (R$)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={reservaForm.valor}
-                      onChange={e => setReservaForm(f => ({ ...f, valor: e.target.value }))}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
-                      placeholder="0,00"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Categoria</label>
-                    <select
-                      value={reservaForm.categoria}
-                      onChange={e => setReservaForm(f => ({ ...f, categoria: e.target.value }))}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
+                    <button
+                      onClick={() => {
+                        setReservaForm(f => ({ ...f, itens: [...f.itens, { categoria: 'SEN', valor: '' }] }));
+                      }}
+                      className="mt-2 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1"
                     >
-                      <option value="SUP">Apartamento Superior</option>
-                      <option value="SEN">Suíte Sênior</option>
-                      <option value="MAS">Suíte Master (Cobertura)</option>
-                    </select>
+                      + Adicionar acomodação
+                    </button>
                   </div>
+
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 flex justify-between items-center">
+                    <span className="text-xs font-medium text-slate-600">Valor Total</span>
+                    <span className="text-sm font-bold text-slate-900">
+                      {formatCurrency(reservaForm.itens.reduce((acc, it) => acc + (Number(it.valor) || 0), 0))}
+                    </span>
+                  </div>
+
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1.5">Canal</label>
                     <select
@@ -1896,11 +2009,16 @@ export const AdminPanel: React.FC = () => {
                 <button
                   onClick={() => {
                     if (reservaModal.acao === 'confirmar') {
+                      const total = reservaForm.itens.reduce((acc, item) => acc + (Number(item.valor) || 0), 0);
+                      const categorias = reservaForm.itens.map(i => i.categoria).join(', ');
+                      const itensJson = reservaForm.itens.map(i => ({ categoria: i.categoria, valor: Number(i.valor) || 0 }));
+
                       marcarReserva(reservaModal.sessionId, 'confirmada', {
-                        valor: Number(reservaForm.valor) || 0,
-                        categoria: reservaForm.categoria,
+                        valor: total,
+                        categoria: categorias,
                         canal: reservaForm.canal,
                         valorCotado: reservaModal.valor,
+                        itens: itensJson
                       });
                     } else {
                       marcarReserva(reservaModal.sessionId, 'perdida', {
@@ -1929,7 +2047,6 @@ export const AdminPanel: React.FC = () => {
 
 // ========= SUBCOMPONENTES =========
 
-// 🔥 Revenue Alerts — Motor de flutuação de tarifa
 const RevenueAlerts: React.FC<{
   alertas: AlertaFlutuacao[];
   limit: number;
@@ -2039,7 +2156,6 @@ const RevenueAlerts: React.FC<{
   );
 };
 
-// 🔥 Executive KPI card
 const ExecCard: React.FC<{
   label: string;
   value: string | number;
@@ -2065,7 +2181,6 @@ const ExecCard: React.FC<{
   );
 };
 
-// Mini stat para o heatmap header
 const MiniStat: React.FC<{
   label: string;
   value: string | number;
