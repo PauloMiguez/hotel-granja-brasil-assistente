@@ -111,6 +111,19 @@ const dedupeEvents = (events: TrackingEvent[]): TrackingEvent[] => {
 const formatCurrency = (v: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 
+// ========= PARSER DE MOEDA =========
+// Aceita 1.758,93 / 1758.93 / 1758
+const parseMoney = (val: string | number): number => {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  let clean = val.replace(/[^\d,.-]/g, '');
+  if (clean.includes(',')) {
+    // Padrão BR: remove pontos de milhar e troca vírgula por ponto
+    clean = clean.replace(/\./g, '').replace(',', '.');
+  }
+  return Number(clean) || 0;
+};
+
 // ========= EXTRAÇÃO DE ITENS DO CARRINHO =========
 const extractCategorias = (eventos: TrackingEvent[]): string[] => {
   const cats = new Set<string>();
@@ -166,7 +179,6 @@ const extractItensCarrinho = (eventos: TrackingEvent[]): Array<{ categoria: stri
     const d = lastEv.data;
     const qtd = Number(d.quantidade || d.qtd || 1);
     
-    // Tenta extrair de arrays no payload
     const arrays = [d.itens, d.categorias, d.quartos, d.acomodacoes].filter(Array.isArray);
     
     if (arrays.length > 0) {
@@ -181,11 +193,9 @@ const extractItensCarrinho = (eventos: TrackingEvent[]): Array<{ categoria: stri
         });
       });
     } else {
-      // Fallback baseado no extractCategorias
       const catsUnicas = extractCategorias(eventos);
       if (catsUnicas.length > 0) {
         catsUnicas.forEach(cat => itens.push({ categoria: cat, valor: 0 }));
-        // Se a quantidade total exceder, adiciona mais itens
         for (let i = catsUnicas.length; i < qtd; i++) {
           itens.push({ categoria: catsUnicas[0], valor: 0 });
         }
@@ -504,7 +514,6 @@ export const AdminPanel: React.FC = () => {
     sessionId: string; acao: 'confirmar' | 'perder'; valor: number;
   } | null>(null);
   
-  // Formulário atualizado para suportar múltiplos itens
   const [reservaForm, setReservaForm] = useState<{
     itens: Array<{ categoria: string; valor: string }>;
     canal: string; 
@@ -683,7 +692,7 @@ export const AdminPanel: React.FC = () => {
                 categoria: dados.categoria, 
                 canal: dados.canal, 
                 valor_cotado: dados.valorCotado,
-                itens: dados.itens // Salva os detalhes no backend
+                itens: dados.itens
               }
             : { motivo: dados.motivo, valor_cotado: dados.valorCotado }),
         },
@@ -1410,7 +1419,7 @@ export const AdminPanel: React.FC = () => {
                                   const sessao = sessoes.find(s => s.sessionId === item.sessionId);
                                   if (!sessao) return;
                                   const itens = extractItensCarrinho(sessao.eventos);
-                                  const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toFixed(2) : '';
+                                  const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
                                   setReservaModal({ sessionId: item.sessionId, acao: 'confirmar', valor: item.valor });
                                   setReservaForm({ 
                                     itens: itens.map(i => ({ categoria: i.categoria, valor: defaultValor })), 
@@ -1496,7 +1505,7 @@ export const AdminPanel: React.FC = () => {
                   adr={adrProxy}
                   onMarcarConfirmada={(sessao) => {
                     const itens = extractItensCarrinho(sessao.eventos);
-                    const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toFixed(2) : '';
+                    const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
                     setReservaModal({ sessionId: sessao.sessionId, acao: 'confirmar', valor: sessao.valorCotado });
                     setReservaForm({ 
                       itens: itens.map(i => ({ categoria: i.categoria, valor: defaultValor })), 
@@ -1696,7 +1705,7 @@ export const AdminPanel: React.FC = () => {
                                     <button
                                       onClick={() => {
                                         const itens = extractItensCarrinho(sessao.eventos);
-                                        const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toFixed(2) : '';
+                                        const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
                                         setReservaModal({ sessionId, acao: 'confirmar', valor: sessao.valorCotado });
                                         setReservaForm({ 
                                           itens: itens.map(i => ({ categoria: i.categoria, valor: defaultValor })), 
@@ -1730,7 +1739,7 @@ export const AdminPanel: React.FC = () => {
                                     <button
                                       onClick={() => {
                                         const itens = extractItensCarrinho(sessao.eventos);
-                                        const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toFixed(2) : '';
+                                        const defaultValor = sessao.valorCotado ? (sessao.valorCotado / (itens.length || 1)).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
                                         setReservaModal({
                                           sessionId,
                                           acao: statusFinal === 'confirmada' ? 'perder' : 'confirmar',
@@ -1926,13 +1935,22 @@ export const AdminPanel: React.FC = () => {
                             <option value="MAS">Master</option>
                           </select>
                           <input
-                            type="number"
-                            step="0.01"
+                            type="text"
+                            inputMode="decimal"
                             value={item.valor}
                             onChange={e => {
                               const newItens = [...reservaForm.itens];
                               newItens[idx].valor = e.target.value;
                               setReservaForm(f => ({ ...f, itens: newItens }));
+                            }}
+                            onBlur={e => {
+                              // Formata o valor ao sair do campo
+                              const num = parseMoney(e.target.value);
+                              if (num > 0) {
+                                const newItens = [...reservaForm.itens];
+                                newItens[idx].valor = num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                setReservaForm(f => ({ ...f, itens: newItens }));
+                              }
                             }}
                             placeholder="Valor final (R$)"
                             className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
@@ -1964,7 +1982,7 @@ export const AdminPanel: React.FC = () => {
                   <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 flex justify-between items-center">
                     <span className="text-xs font-medium text-slate-600">Valor Total</span>
                     <span className="text-sm font-bold text-slate-900">
-                      {formatCurrency(reservaForm.itens.reduce((acc, it) => acc + (Number(it.valor) || 0), 0))}
+                      {formatCurrency(reservaForm.itens.reduce((acc, it) => acc + parseMoney(it.valor), 0))}
                     </span>
                   </div>
 
@@ -2009,9 +2027,9 @@ export const AdminPanel: React.FC = () => {
                 <button
                   onClick={() => {
                     if (reservaModal.acao === 'confirmar') {
-                      const total = reservaForm.itens.reduce((acc, item) => acc + (Number(item.valor) || 0), 0);
+                      const total = reservaForm.itens.reduce((acc, item) => acc + parseMoney(item.valor), 0);
                       const categorias = reservaForm.itens.map(i => i.categoria).join(', ');
-                      const itensJson = reservaForm.itens.map(i => ({ categoria: i.categoria, valor: Number(i.valor) || 0 }));
+                      const itensJson = reservaForm.itens.map(i => ({ categoria: i.categoria, valor: parseMoney(i.valor) }));
 
                       marcarReserva(reservaModal.sessionId, 'confirmada', {
                         valor: total,
