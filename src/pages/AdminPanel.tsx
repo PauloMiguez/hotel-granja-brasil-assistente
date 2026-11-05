@@ -111,6 +111,43 @@ const dedupeEvents = (events: TrackingEvent[]): TrackingEvent[] => {
 const formatCurrency = (v: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 
+// ========= EXTRAÇÃO DE CATEGORIAS =========
+const extractCategorias = (eventos: TrackingEvent[]): string[] => {
+  const cats = new Set<string>();
+  const normalize = (c: string) => {
+    const u = c.toUpperCase();
+    if (u.includes('SUPERIOR') || u === 'SUP') return 'SUP';
+    if (u.includes('SENIOR') || u === 'SEN') return 'SEN';
+    if (u.includes('MASTER') || u === 'MAS') return 'MAS';
+    return u;
+  };
+  const add = (val: any) => {
+    if (typeof val === 'string' && val.trim() !== '') {
+      cats.add(normalize(val.trim()));
+    }
+  };
+  
+  eventos.forEach(ev => {
+    if (['carrinho_adicionado', 'orcamento_visualizado', 'whatsapp_enviado'].includes(ev.event)) {
+      const d = ev.data || {};
+      add(d.categoria);
+      add(d.tipo);
+      add(d.acomodacao);
+      add(d.room_type);
+      if (Array.isArray(d.categorias)) d.categorias.forEach(add);
+      if (Array.isArray(d.itens)) {
+        d.itens.forEach((item: any) => {
+          add(item.categoria);
+          add(item.tipo);
+          add(item.acomodacao);
+          add(item.room_type);
+        });
+      }
+    }
+  });
+  return Array.from(cats);
+};
+
 const EVENTOS_IGNORADOS = ['teste_final', 'diagnostico', 'teste'];
 
 // ========= AGRUPAMENTO DE SESSÕES =========
@@ -411,7 +448,7 @@ export const AdminPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'demanda' | 'jornadas' | 'conversas'>('dashboard');
 
   const [reservaModal, setReservaModal] = useState<{
-    sessionId: string; acao: 'confirmar' | 'perder'; valor: number;
+    sessionId: string; acao: 'confirmar' | 'perder'; valor: number; categoriasDetectadas: string[];
   } | null>(null);
   const [reservaForm, setReservaForm] = useState({
     valor: '', categoria: 'SEN', canal: 'whatsapp', motivo: 'preco',
@@ -1313,8 +1350,11 @@ export const AdminPanel: React.FC = () => {
                             <td className="px-4 py-2.5 text-right whitespace-nowrap">
                               <button
                                 onClick={() => {
-                                  setReservaModal({ sessionId: item.sessionId, acao: 'confirmar', valor: item.valor });
-                                  setReservaForm({ valor: String(item.valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                                  const sessao = sessoes.find(s => s.sessionId === item.sessionId);
+                                  const cats = sessao ? extractCategorias(sessao.eventos) : [];
+                                  const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
+                                  setReservaModal({ sessionId: item.sessionId, acao: 'confirmar', valor: item.valor, categoriasDetectadas: cats });
+                                  setReservaForm({ valor: String(item.valor || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
                                 }}
                                 className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-md mr-1 transition-colors"
                                 title="Confirmar reserva"
@@ -1323,8 +1363,11 @@ export const AdminPanel: React.FC = () => {
                               </button>
                               <button
                                 onClick={() => {
-                                  setReservaModal({ sessionId: item.sessionId, acao: 'perder', valor: item.valor });
-                                  setReservaForm({ valor: String(item.valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                                  const sessao = sessoes.find(s => s.sessionId === item.sessionId);
+                                  const cats = sessao ? extractCategorias(sessao.eventos) : [];
+                                  const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
+                                  setReservaModal({ sessionId: item.sessionId, acao: 'perder', valor: item.valor, categoriasDetectadas: cats });
+                                  setReservaForm({ valor: String(item.valor || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
                                 }}
                                 className="text-xs bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-md transition-colors"
                                 title="Não fechou"
@@ -1386,13 +1429,17 @@ export const AdminPanel: React.FC = () => {
                 <KanbanView
                   sessoes={sessoes}
                   adr={adrProxy}
-                  onMarcarConfirmada={(sid, valor) => {
-                    setReservaModal({ sessionId: sid, acao: 'confirmar', valor });
-                    setReservaForm({ valor: String(valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                  onMarcarConfirmada={(sessao) => {
+                    const cats = extractCategorias(sessao.eventos);
+                    const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
+                    setReservaModal({ sessionId: sessao.sessionId, acao: 'confirmar', valor: sessao.valorCotado, categoriasDetectadas: cats });
+                    setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
                   }}
-                  onMarcarPerdida={(sid, valor) => {
-                    setReservaModal({ sessionId: sid, acao: 'perder', valor });
-                    setReservaForm({ valor: String(valor || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                  onMarcarPerdida={(sessao) => {
+                    const cats = extractCategorias(sessao.eventos);
+                    const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
+                    setReservaModal({ sessionId: sessao.sessionId, acao: 'perder', valor: sessao.valorCotado, categoriasDetectadas: cats });
+                    setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
                   }}
                 />
               ) : (
@@ -1576,8 +1623,10 @@ export const AdminPanel: React.FC = () => {
                                   <div className="flex gap-2 pt-2 border-t border-slate-100">
                                     <button
                                       onClick={() => {
-                                        setReservaModal({ sessionId, acao: 'confirmar', valor: sessao.valorCotado });
-                                        setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                                        const cats = extractCategorias(sessao.eventos);
+                                        const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
+                                        setReservaModal({ sessionId, acao: 'confirmar', valor: sessao.valorCotado, categoriasDetectadas: cats });
+                                        setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
                                       }}
                                       className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition-colors"
                                     >
@@ -1585,8 +1634,10 @@ export const AdminPanel: React.FC = () => {
                                     </button>
                                     <button
                                       onClick={() => {
-                                        setReservaModal({ sessionId, acao: 'perder', valor: sessao.valorCotado });
-                                        setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: 'SEN', canal: 'whatsapp', motivo: 'preco' });
+                                        const cats = extractCategorias(sessao.eventos);
+                                        const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
+                                        setReservaModal({ sessionId, acao: 'perder', valor: sessao.valorCotado, categoriasDetectadas: cats });
+                                        setReservaForm({ valor: String(sessao.valorCotado || ''), categoria: defaultCat, canal: 'whatsapp', motivo: 'preco' });
                                       }}
                                       className="flex-1 bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition-colors"
                                     >
@@ -1599,14 +1650,17 @@ export const AdminPanel: React.FC = () => {
                                   <div className="pt-2 border-t border-slate-100 flex gap-2">
                                     <button
                                       onClick={() => {
+                                        const cats = extractCategorias(sessao.eventos);
+                                        const defaultCat = cats.length > 0 ? cats[0] : 'SEN';
                                         setReservaModal({
                                           sessionId,
                                           acao: statusFinal === 'confirmada' ? 'perder' : 'confirmar',
                                           valor: sessao.valorCotado,
+                                          categoriasDetectadas: cats,
                                         });
                                         setReservaForm({
                                           valor: String(sessao.valorCotado || ''),
-                                          categoria: 'SEN',
+                                          categoria: defaultCat,
                                           canal: 'whatsapp',
                                           motivo: 'preco',
                                         });
@@ -1776,6 +1830,12 @@ export const AdminPanel: React.FC = () => {
             <div className="p-5 space-y-4">
               {reservaModal.acao === 'confirmar' ? (
                 <>
+                  {reservaModal.categoriasDetectadas && reservaModal.categoriasDetectadas.length > 1 && (
+                    <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-xs text-amber-800 mb-3">
+                      ⚠️ <strong>Múltiplas categorias detectadas no carrinho:</strong> {reservaModal.categoriasDetectadas.join(', ')}.
+                      Selecione a categoria principal para a reserva abaixo.
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1.5">Valor final (R$)</label>
                     <input
@@ -2034,8 +2094,8 @@ const MiniStat: React.FC<{
 const KanbanView: React.FC<{
   sessoes: SessaoAgrupada[];
   adr: number;
-  onMarcarConfirmada: (sid: string, valor: number) => void;
-  onMarcarPerdida: (sid: string, valor: number) => void;
+  onMarcarConfirmada: (sessao: SessaoAgrupada) => void;
+  onMarcarPerdida: (sessao: SessaoAgrupada) => void;
 }> = ({ sessoes, adr, onMarcarConfirmada, onMarcarPerdida }) => {
   const etapas = [
     { key: 'consulta_iniciada', label: 'Buscou', icon: '🔍' },
@@ -2105,14 +2165,14 @@ const KanbanView: React.FC<{
                     {etapa.key === 'whatsapp_enviado' && (
                       <div className="flex gap-1 mt-1.5">
                         <button
-                          onClick={() => onMarcarConfirmada(s.sessionId, s.valorCotado)}
+                          onClick={() => onMarcarConfirmada(s)}
                           className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-1 py-1 rounded-md text-[10px] font-medium transition-colors"
                           title="Confirmar reserva"
                         >
                           ✅
                         </button>
                         <button
-                          onClick={() => onMarcarPerdida(s.sessionId, s.valorCotado)}
+                          onClick={() => onMarcarPerdida(s)}
                           className="flex-1 bg-rose-600 hover:bg-rose-700 text-white px-1 py-1 rounded-md text-[10px] font-medium transition-colors"
                           title="Não fechou"
                         >
