@@ -111,41 +111,37 @@ const dedupeEvents = (events: TrackingEvent[]): TrackingEvent[] => {
 const formatCurrency = (v: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 
-// ========= EXTRAÇÃO DE CATEGORIAS =========
+// ========= EXTRAÇÃO PROFUNDA DE CATEGORIAS =========
 const extractCategorias = (eventos: TrackingEvent[]): string[] => {
   const cats = new Set<string>();
-  const normalize = (c: string) => {
-    const u = c.toUpperCase();
-    if (u.includes('SUPERIOR') || u === 'SUP') return 'SUP';
-    if (u.includes('SENIOR') || u === 'SEN') return 'SEN';
-    if (u.includes('MASTER') || u === 'MAS') return 'MAS';
-    return u;
+  
+  const checkString = (str: string) => {
+    const s = str.toUpperCase();
+    if (s.includes('SUPERIOR') || /\bSUP\b/.test(s)) cats.add('SUP');
+    if (s.includes('SENIOR') || s.includes('SÊNIOR') || /\bSEN\b/.test(s)) cats.add('SEN');
+    if (s.includes('MASTER') || /\bMAS\b/.test(s)) cats.add('MAS');
   };
-  const add = (val: any) => {
-    if (typeof val === 'string' && val.trim() !== '') {
-      cats.add(normalize(val.trim()));
+
+  const traverse = (val: any) => {
+    if (!val) return;
+    if (typeof val === 'string') {
+      checkString(val);
+    } else if (Array.isArray(val)) {
+      val.forEach(traverse);
+    } else if (typeof val === 'object') {
+      Object.values(val).forEach(traverse);
     }
   };
-  
+
   eventos.forEach(ev => {
-    if (['carrinho_adicionado', 'orcamento_visualizado', 'whatsapp_enviado'].includes(ev.event)) {
-      const d = ev.data || {};
-      add(d.categoria);
-      add(d.tipo);
-      add(d.acomodacao);
-      add(d.room_type);
-      if (Array.isArray(d.categorias)) d.categorias.forEach(add);
-      if (Array.isArray(d.itens)) {
-        d.itens.forEach((item: any) => {
-          add(item.categoria);
-          add(item.tipo);
-          add(item.acomodacao);
-          add(item.room_type);
-        });
-      }
+    if (['carrinho_adicionado', 'orcamento_visualizado', 'whatsapp_enviado', 'consulta_sucesso'].includes(ev.event)) {
+      traverse(ev.data);
     }
   });
-  return Array.from(cats);
+
+  // Ordena para manter SUP, SEN, MAS nesta ordem de prioridade
+  const order: Record<string, number> = { 'SUP': 1, 'SEN': 2, 'MAS': 3 };
+  return Array.from(cats).sort((a, b) => (order[a] || 9) - (order[b] || 9));
 };
 
 const EVENTOS_IGNORADOS = ['teste_final', 'diagnostico', 'teste'];
